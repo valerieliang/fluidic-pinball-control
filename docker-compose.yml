@@ -1,0 +1,13 @@
+services:
+  hydrogym:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    image: fluidic-pinball-control-hydrogym
+    container_name: hydrogym
+    ports:
+      - "8888:8888"
+    tty: true
+    working_dir: /home/firedrake/workspace
+    volumes:
+      - .:/home/firedrake/workspace

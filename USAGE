@@ -1,5 +1,7 @@
 # Docker
 
+This project uses a custom Docker image based on Firedrake.
+
 ## Build and run:
 
 ```
@@ -12,37 +14,14 @@ docker compose up --build
 docker compose up
 ```
 
-## Stop:
+## In a new terminal, enter:
 
 ```
-docker compose down
+docker exec -it hydrogym /bin/bash
+source /home/firedrake/firedrake/bin/activate
 ```
 
-# Build & Run Hydrogym (Docker)
-
-This project uses a custom Docker image based on Firedrake.
-
-## 1. Build the Docker image (one-time)
-
-From the directory containing the Dockerfile:
-
-```
-docker build -t firedrake-hydrogym .
-```
-
-## 2. Run the container:
-
-```
-docker run -it --name hydrogym -p 8888:8888 firedrake-hydrogym
-```
-
-If the container already exists:
-
-```
-docker start -i hydrogym
-```
-
-## 3a. Run Hydrogym demo
+### Test: view hydrogym demo:
 
 ```
 cd hydrogym/examples/demo
