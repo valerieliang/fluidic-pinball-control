@@ -16,7 +16,7 @@ From the directory containing the Dockerfile:
 
 From your project root:
 
-    docker pull lpaehler/hydrogym-devpod:stable                                      (downlaod container)
+    docker pull lpaehler/hydrogym-devpod:stable                                      (download container)
     docker run -it --name hydrogym -p 8888:8888 lpaehler/hydrogym-devpod:stable      (create container for the first time)
 
 If container already exists:
