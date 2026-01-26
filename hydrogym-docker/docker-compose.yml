@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  hydrogym:
+    image: firedrake-hydrogym
+    build: .
+    container_name: hydrogym
+    ports:
+      - "8888:8888"
+    tty: true
+    stdin_open: true

@@ -1,38 +1,55 @@
-# Build & Run Hydrogym (Docker-only, reproducible)
+# Docker
+
+## Build and run:
+
+```
+docker compose up --build
+```
+
+## If already built:
+
+```
+docker compose up
+```
+
+## Stop:
+
+```
+docker compose down
+```
+
+# Build & Run Hydrogym (Docker)
 
 This project uses a custom Docker image based on Firedrake.
 
-------------------------------------------------------------
-
-1. Build the Docker image (one-time)
+## 1. Build the Docker image (one-time)
 
 From the directory containing the Dockerfile:
 
-    docker build -t firedrake-hydrogym .
+```
+docker build -t firedrake-hydrogym .
+```
 
-------------------------------------------------------------
+## 2. Run the container:
 
-2. Run the container
+```
+docker run -it --name hydrogym -p 8888:8888 firedrake-hydrogym
+```
 
-From your project root:
+If the container already exists:
 
-    docker pull lpaehler/hydrogym-devpod:stable                                      (download container)
-    docker run -it --name hydrogym -p 8888:8888 lpaehler/hydrogym-devpod:stable      (create container for the first time)
+```
+docker start -i hydrogym
+```
 
-If container already exists:
-    docker start -i hydrogym                                                         (use container)
+## 3a. Run Hydrogym demo
 
-------------------------------------------------------------
+```
+cd hydrogym/examples/demo
+python3 run-transient.py
+```
 
-3. Run Hydrogym demo
+# Notes:
 
-Inside the container:
-
-    cd hydrogym/examples/demo
-    python3 run-transient.py
-
-------------------------------------------------------------
-Notes
-
-- Exit container with: exit
+- Exit container with `exit`
 - All dependencies are installed inside the Docker image
