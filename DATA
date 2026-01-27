@@ -50,7 +50,7 @@ pinball_dataset_h5_enhanced/
 
 #### **obs** (Observations)
 - **Type:** Float array
-- **Shape:** (timesteps, 1)
+- **Shape:** (timesteps, 6)
 - **Range:** Environment-dependent
 - **Description:** Current observation of the flow state from the environment's sensor/observation function. This is the information available to the RL agent at each timestep.
 - **Source:** `flow.get_observations()`
