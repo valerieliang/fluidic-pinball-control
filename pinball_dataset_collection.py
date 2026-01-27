@@ -59,7 +59,9 @@ SAVE_DIR = "pinball_dataset_h5"
 os.makedirs(SAVE_DIR, exist_ok=True)
 save_path = os.path.join(SAVE_DIR, "fluidic_pinball_data.h5")
 
-EPISODES = 100
+# TODO: UPDATE PARAMS AS NEEDED
+
+EPISODES = 2
 MAX_STEPS = 200
 
 if VERBOSE:
