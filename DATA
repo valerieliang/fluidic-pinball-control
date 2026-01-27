@@ -1,0 +1,237 @@
+# Fluidic Pinball Dataset - Data Documentation
+
+## Dataset Overview
+
+This dataset contains simulation data from the **Fluidic Pinball** flow control environment, a benchmark problem in fluid dynamics and reinforcement learning. The environment simulates turbulent flow around three cylinders arranged in an equilateral triangle formation, where the cylinders can be rotated to control the wake dynamics and minimize drag.
+
+**Dataset Purpose:** Train reinforcement learning agents to learn optimal flow control policies for drag reduction and wake stabilization.
+
+**Environment:** HydroGym Fluidic Pinball (Firedrake-based CFD simulation)
+
+**Physics:** 2D incompressible Navier-Stokes equations at Reynolds number Re = 30
+
+---
+
+## File Structure
+```
+pinball_dataset_h5_enhanced/
+└── fluidic_pinball_data_enhanced.h5
+    ├── episode_0/
+    │   ├── obs                  [200 timesteps × 1 feature]
+    │   ├── next_obs            [200 timesteps × 1 feature]
+    │   ├── actions             [200 timesteps × 3 features]
+    │   ├── rewards             [200 timesteps × 1 feature]
+    │   ├── Cd                  [200 timesteps × 1 feature]
+    │   ├── Cl                  [200 timesteps × 1 feature]
+    │   ├── Re                  [200 timesteps × 1 feature]
+    │   ├── done                [200 timesteps × 1 feature]
+    │   ├── vorticity           [200 timesteps × 1 feature]
+    │   ├── pressure            [200 timesteps × 1 feature]
+    │   ├── kinetic_energy      [200 timesteps × 1 feature]
+    │   ├── timestep            [200 timesteps × 1 feature]
+    │   └── cumulative_reward   [200 timesteps × 1 feature]
+    ├── episode_1/
+    │   └── ... (same structure)
+    └── episode_99/
+        └── ... (same structure)
+```
+
+**Total Size:**
+- Episodes: 100
+- Steps per episode: 200
+- Total transitions: 20,000
+- Features per transition: 13+
+
+---
+
+## Data Fields
+
+### 1. State Information
+
+#### **obs** (Observations)
+- **Type:** Float array
+- **Shape:** (timesteps, 1)
+- **Range:** Environment-dependent
+- **Description:** Current observation of the flow state from the environment's sensor/observation function. This is the information available to the RL agent at each timestep.
+- **Source:** `flow.get_observations()`
+- **Use Case:** Input to RL policy network
+
+#### **next_obs** (Next Observations)
+- **Type:** Float array
+- **Shape:** (timesteps, 1)
+- **Range:** Environment-dependent
+- **Description:** Observation at the next timestep (t+1). Essential for temporal difference (TD) learning algorithms like Q-learning, SARSA, and actor-critic methods.
+- **Source:** `flow.get_observations()` after `solver.step()`
+- **Use Case:** Target for value function estimation in TD methods
+
+---
+
+### 2. Action Information
+
+#### **actions** (Control Actions)
+- **Type:** Float array
+- **Shape:** (timesteps, 3)
+- **Range:** [-1.5708, 1.5708] (approximately -π/2 to π/2 radians)
+- **Description:** Control actions applied to the three cylinders. Each value represents the rotation angle or angular velocity of one cylinder. The three cylinders form an equilateral triangle in the flow, and their rotation affects the wake dynamics.
+  - `actions[0]`: Control for cylinder 1 (front cylinder)
+  - `actions[1]`: Control for cylinder 2 (rear-left cylinder)
+  - `actions[2]`: Control for cylinder 3 (rear-right cylinder)
+- **Source:** Policy (random or learned)
+- **Physical Meaning:** Cylinder rotation angles that modify the boundary conditions and alter flow separation
+- **Use Case:** Action taken by the agent; input to dynamics model
+
+---
+
+### 3. Reward Signal
+
+#### **rewards** (Instantaneous Reward)
+- **Type:** Float array
+- **Shape:** (timesteps,)
+- **Range:** Problem-dependent (typically negative for drag-based objectives)
+- **Description:** Instantaneous reward signal computed by the environment's objective function. Typically designed to encourage drag reduction and/or flow stabilization.
+- **Source:** `flow.evaluate_objective()`
+- **Typical Formulation:** Often `-Cd` (negative drag) or a combination of drag and control cost
+- **Use Case:** Training signal for RL algorithms; defines the optimization objective
+
+#### **cumulative_reward** (Return)
+- **Type:** Float array
+- **Shape:** (timesteps,)
+- **Range:** Monotonically increasing/decreasing within episode
+- **Description:** Sum of all rewards from the start of the episode up to the current timestep. Represents the total return accumulated so far.
+- **Formula:** `cumulative_reward[t] = sum(rewards[0:t+1])`
+- **Use Case:** Episode performance tracking; can be used for reward normalization
+
+---
+
+### 4. Aerodynamic Forces
+
+#### **Cd** (Drag Coefficient)
+- **Type:** Float array
+- **Shape:** (timesteps,)
+- **Range:** Typically 0.1 - 2.0 for this geometry at Re=30
+- **Description:** Dimensionless drag coefficient representing the resistance force in the flow direction. Lower values indicate better aerodynamic performance.
+- **Formula:** `Cd = Fd / (0.5 × ρ × U² × A)` where Fd is drag force, ρ is density, U is freestream velocity, A is reference area
+- **Source:** `flow.compute_forces()['Cd']`
+- **Physical Meaning:** Primary performance metric for drag reduction
+- **Use Case:** Additional supervision signal; can be used as auxiliary reward or for analysis
+
+#### **Cl** (Lift Coefficient)
+- **Type:** Float array
+- **Shape:** (timesteps,)
+- **Range:** Typically -1.0 to 1.0 for this symmetric geometry
+- **Description:** Dimensionless lift coefficient representing the force perpendicular to the flow direction. For symmetric configurations, this oscillates around zero due to vortex shedding.
+- **Formula:** `Cl = Fl / (0.5 × ρ × U² × A)` where Fl is lift force
+- **Source:** `flow.compute_forces()['Cl']`
+- **Physical Meaning:** Indicates flow asymmetry and oscillations; large variations suggest strong vortex shedding
+- **Use Case:** Flow stability analysis; detecting bifurcations or transitions
+
+---
+
+### 5. Flow Physics Features
+
+#### **vorticity** (Vorticity Magnitude)
+- **Type:** Float array
+- **Shape:** (timesteps,)
+- **Range:** 0 to ~100+ (problem-dependent)
+- **Description:** Measure of local rotation in the flow field. High vorticity indicates strong rotational motion, typically found in shear layers and wakes.
+- **Formula:** `ω = ∇ × u` (curl of velocity field), then `||ω||` (L2 norm)
+- **Source:** `flow.vorticity()` → `np.linalg.norm()`
+- **Physical Meaning:** Indicator of turbulence intensity and flow separation
+- **Use Case:** Feature for flow regime classification; proxy for turbulence
+
+#### **pressure** (Mean Pressure)
+- **Type:** Float array
+- **Shape:** (timesteps,)
+- **Range:** Problem-dependent; often centered around 0
+- **Description:** Spatial average of the pressure field in the computational domain. Pressure drives the flow and is coupled with velocity through the Navier-Stokes equations.
+- **Source:** `np.mean(flow.p.dat.data)`
+- **Physical Meaning:** Overall pressure level in the domain; related to flow acceleration
+- **Use Case:** Flow characterization; can indicate stagnation or acceleration regions
+
+#### **kinetic_energy** (Mean Kinetic Energy)
+- **Type:** Float array
+- **Shape:** (timesteps,)
+- **Range:** > 0
+- **Description:** Average kinetic energy per unit volume in the flow field. Indicates the overall energy content of the flow.
+- **Formula:** `KE = 0.5 × mean(u²)` where u is the velocity magnitude
+- **Source:** `0.5 * np.mean(flow.u.dat.data**2)`
+- **Physical Meaning:** Energy available for turbulence and mixing; higher values indicate more vigorous flow
+- **Use Case:** Energy budget analysis; detecting flow transitions
+
+---
+
+### 6. Episode Metadata
+
+#### **Re** (Reynolds Number)
+- **Type:** Float array (constant within dataset)
+- **Shape:** (timesteps,)
+- **Value:** 30.0
+- **Description:** Reynolds number characterizing the flow regime. Represents the ratio of inertial forces to viscous forces.
+- **Formula:** `Re = U × L / ν` where U is velocity scale, L is length scale, ν is kinematic viscosity
+- **Physical Meaning:** Re = 30 is in the laminar-to-transitional regime; vortex shedding is expected
+- **Use Case:** Flow regime identification; useful if dataset contains multiple Reynolds numbers
+
+#### **done** (Episode Termination Flag)
+- **Type:** Boolean array
+- **Shape:** (timesteps,)
+- **Values:** False for steps 0-198, True for step 199
+- **Description:** Indicates whether the episode has terminated. True at the last timestep of each episode.
+- **Use Case:** Essential for episodic RL algorithms; marks boundaries for return calculation
+
+#### **timestep** (Step Index)
+- **Type:** Integer array
+- **Shape:** (timesteps,)
+- **Range:** 0 to 199
+- **Description:** Index of the current timestep within the episode. Allows temporal awareness in the policy.
+- **Use Case:** Time-dependent policies; understanding transient vs. steady-state behavior
+
+---
+
+## Physical Setup
+
+### Geometry
+- **Configuration:** Three circular cylinders in equilateral triangle arrangement
+- **Cylinder Diameter:** D (reference length)
+- **Triangle Side Length:** ~3D
+- **Domain:** Rectangular channel with inlet, outlet, and cylinder obstacles
+
+### Flow Conditions
+- **Reynolds Number:** Re = 30
+- **Flow Regime:** Laminar with vortex shedding
+- **Freestream Velocity:** U_∞ (normalized to 1)
+- **Fluid:** Incompressible Newtonian fluid (air or water analog)
+
+### Control Mechanism
+- **Actuators:** Rotation of the three cylinders
+- **Control Authority:** ±π/2 radians
+- **Control Frequency:** Every timestep (dt = 0.01)
+
+### Numerical Scheme
+- **Solver:** IPCS (Incremental Pressure Correction Scheme)
+- **Time Discretization:** Implicit Euler
+- **Timestep:** dt = 0.01
+- **Spatial Discretization:** Finite elements (Firedrake)
+
+---
+
+## Data Collection Strategy
+
+### Episode Structure
+- **Episode Length:** 200 timesteps (2.0 time units)
+- **Total Episodes:** 100
+- **Episode Initialization:** Flow reset to base state
+
+### Action Policy
+The dataset contains a mix of control strategies to ensure diversity:
+- **30% Random:** Uniform random actions in [-MAX_CONTROL, MAX_CONTROL]
+- **70% Sinusoidal:** Structured periodic control with random frequency
+
+This mixed policy ensures:
+1. Exploration of state space
+2. Structured temporal patterns
+3. Diversity for off-policy RL training
+
+### Temporal Resolution
+- **Physical Time per Step:** 0.01 time units
+- **Episode Duration:** 2.0 time units
+- **Total Simulation Time:** 200 time units (100 episodes × 2.0)
