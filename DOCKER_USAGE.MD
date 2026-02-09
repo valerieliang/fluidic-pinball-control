@@ -1,4 +1,4 @@
-# Docker
+# DOCKER_USAGE.MD
 
 This project uses a custom Docker image based on Firedrake.
 
