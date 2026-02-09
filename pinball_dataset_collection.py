@@ -10,7 +10,7 @@ from scipy import signal
 parser = argparse.ArgumentParser(description='Collect fluidic pinball dataset')
 parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
 parser.add_argument('--episodes', type=int, default=2, help='Number of episodes')
-parser.add_argument('--steps', type=int, default=200, help='Steps per episode')
+parser.add_argument('--steps', type=int, default=230, help='Steps per episode')
 parser.add_argument('--reynolds', type=float, default=30.0, help='Reynolds number')
 args = parser.parse_args()
 
@@ -119,6 +119,16 @@ def compute_f0_from_lift(cl_history, dt):
 with h5py.File(save_path, "w") as f:
     
     total_start = time.time()
+    
+    # Store global metadata/dimensions at the root level
+    f.attrs['num_episodes'] = EPISODES
+    f.attrs['max_steps_per_episode'] = MAX_STEPS
+    f.attrs['reynolds_number'] = Re_value
+    f.attrs['obs_dim'] = int(actual_obs_dim)
+    f.attrs['act_dim'] = int(flow.ACT_DIM)
+    f.attrs['dt'] = float(flow.DEFAULT_DT * timesteps_per_action)
+    f.attrs['total_transitions'] = EPISODES * MAX_STEPS
+    f.attrs['force_vector_dim'] = 3  # CD_vec and CL_vec are 3-element vectors
     
     for ep in range(EPISODES):
         ep_start = time.time()
@@ -382,13 +392,14 @@ with h5py.File(save_path, "w") as f:
             
             # Store metadata about array structure and f0
             grp.attrs['num_steps'] = len(obs_list)
-            grp.attrs['obs_dim'] = actual_obs_dim
-            grp.attrs['act_dim'] = flow.ACT_DIM
-            grp.attrs['Re'] = Re_value
-            grp.attrs['f0'] = f0
-            grp.attrs['f0_cyl2'] = f0_cyl2
-            grp.attrs['f0_cyl3'] = f0_cyl3
-            grp.attrs['dt'] = dt
+            grp.attrs['obs_dim'] = int(actual_obs_dim)  # As integer
+            grp.attrs['act_dim'] = int(flow.ACT_DIM)    # As integer
+            grp.attrs['Re'] = float(Re_value)           # As float
+            grp.attrs['f0'] = float(f0)                 # As float
+            grp.attrs['f0_cyl2'] = float(f0_cyl2)       # As float
+            grp.attrs['f0_cyl3'] = float(f0_cyl3)       # As float
+            grp.attrs['dt'] = float(dt)                 # As float
+            grp.attrs['cd_cl_dim'] = 3                  # Dimension of CD_vec and CL_vec
             
         except Exception as e:
             print(f"Episode {ep}: Failed to save datasets: {e}")
@@ -420,24 +431,30 @@ if VERBOSE:
     print("="*60)
     
     print("\nDataset storage format:")
-    print("  Variable-length arrays stored as:")
-    print("    - obs_flat + obs_lengths (reconstruct with cumsum)")
-    print("    - next_obs_flat + next_obs_lengths")
-    print("    - actions_flat + actions_lengths")
-    print("  Force vectors (fixed 3-element per step):")
-    print("    - CD_vec (steps x 3): drag on each cylinder")
-    print("    - CL_vec (steps x 3): lift on each cylinder")
-    print("    - CD_total: sum of CD_vec")
-    print("    - CL2: lift on cylinder 2")
-    print("    - CL3: lift on cylinder 3")
-    print("  Scalars per step:")
-    print("    - rewards, Re, done, vorticity, pressure")
-    print("    - kinetic_energy, timestep, cumulative_reward")
-    print("  Episode attributes:")
-    print("    - f0: dominant frequency (Hz)")
-    print("    - f0_cyl2, f0_cyl3: per-cylinder frequencies")
-    print("\nTo reconstruct variable-length arrays:")
-    print("  offsets = np.concatenate([[0], np.cumsum(lengths[:-1])])")
-    print("  arrays = [flat[offset:offset+length] for offset, length in zip(offsets, lengths)]")
+    print("  Global attributes (root level):")
+    print("    - num_episodes: {EPISODES}")
+    print("    - obs_dim: observation dimension")
+    print("    - act_dim: action dimension")
+    print("    - force_vector_dim: 3 (for CD_vec, CL_vec)")
+    print("    - reynolds_number: Re value")
+    print("    - dt: timestep size")
+    print("  Episode-level data in groups: episode_0, episode_1, ...")
+    print("  Each episode contains:")
+    print("    Variable-length arrays stored as:")
+    print("      - obs_flat + obs_lengths")
+    print("      - next_obs_flat + next_obs_lengths")
+    print("      - actions_flat + actions_lengths")
+    print("    Force vectors (fixed 3-element per step):")
+    print("      - CD_vec (steps x 3): drag on each cylinder")
+    print("      - CL_vec (steps x 3): lift on each cylinder")
+    print("    Scalars per step:")
+    print("      - rewards, Re, done, vorticity, pressure, etc.")
+    print("    Episode attributes:")
+    print("      - num_steps, obs_dim, act_dim, f0, etc.")
+    print("\nTo access global dimensions:")
+    print("  with h5py.File('file.h5', 'r') as f:")
+    print("    obs_dim = f.attrs['obs_dim']")
+    print("    act_dim = f.attrs['act_dim']")
+    print("    num_episodes = f.attrs['num_episodes']")
 else:
     print(f"Dataset complete: {EPISODES * MAX_STEPS} transitions saved to {save_path}")
