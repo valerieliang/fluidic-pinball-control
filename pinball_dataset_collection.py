@@ -314,10 +314,25 @@ with h5py.File(save_path, "w") as f:
         dt = flow.DEFAULT_DT * timesteps_per_action
         f0_cyl2 = compute_f0_from_lift(cl2_history, dt)
         f0_cyl3 = compute_f0_from_lift(cl3_history, dt)
-        f0 = np.mean([f for f in [f0_cyl2, f0_cyl3] if not np.isnan(f)]) if any(not np.isnan(f) for f in [f0_cyl2, f0_cyl3]) else np.nan
-        
+        # Take the average or use one as representative
+        if not np.isnan(f0_cyl2) and not np.isnan(f0_cyl3):
+            f0 = (f0_cyl2 + f0_cyl3) / 2  # Average if both available
+        elif not np.isnan(f0_cyl2):
+            f0 = f0_cyl2  # Use cylinder 2 if only one available
+        elif not np.isnan(f0_cyl3):
+            f0 = f0_cyl3  # Use cylinder 3 if only one available
+        else:
+            f0 = np.nan
+
+
         if VERBOSE:
             print(f"Episode {ep}: Computed f0 = {f0:.4f} Hz (cyl2: {f0_cyl2:.4f}, cyl3: {f0_cyl3:.4f})")
+
+        # Store f0 as a scalar dataset
+        grp.create_dataset("f0", data=f0)
+        grp.attrs['f0'] = float(f0) 
+        grp.create_dataset("f0_cyl2", data=f0_cyl2)
+        grp.create_dataset("f0_cyl3", data=f0_cyl3)
 
         # Save all datasets
         try:
