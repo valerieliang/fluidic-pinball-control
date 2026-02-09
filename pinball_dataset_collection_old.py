@@ -4,26 +4,17 @@ import h5py
 import os
 import time
 import argparse
-from scipy import signal
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='Collect fluidic pinball dataset')
 parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
-parser.add_argument('--episodes', type=int, default=2, help='Number of episodes')
-parser.add_argument('--steps', type=int, default=200, help='Steps per episode')
-parser.add_argument('--reynolds', type=float, default=30.0, help='Reynolds number')
 args = parser.parse_args()
-
 VERBOSE = args.verbose
-EPISODES = args.episodes
-MAX_STEPS = args.steps
-TARGET_RE = args.reynolds
 
 if VERBOSE:
     print("="*60)
-    print("Data Collection for RL Training - Fluidic Pinball")
+    print("Data Collection for RL Training")
     print("="*60)
-    print(f"Target Reynolds Number: {TARGET_RE}")
 
 # Initialize flow and solver
 try:
@@ -31,28 +22,20 @@ try:
     solver = IPCS(flow, dt=flow.DEFAULT_DT)
     if VERBOSE:
         print("Flow and solver created successfully")
-        print(f"  Timestep: {flow.DEFAULT_DT}")
 except Exception as e:
     print(f"Failed to create flow/solver: {e}")
     raise
 
 # Extract Reynolds number
 try:
-    Re_value = float(flow.Re) if hasattr(flow, 'Re') else TARGET_RE
-    if VERBOSE:
-        print(f"\nReynolds number: {Re_value}")
+    Re_value = float(flow.Re)
 except:
-    Re_value = TARGET_RE
-    if VERBOSE:
-        print(f"Using target Reynolds: {Re_value}")
-
-# Get timesteps per control action
-try:
-    timesteps_per_action = flow.num_steps if hasattr(flow, 'num_steps') else 1
-    if VERBOSE:
-        print(f"  Timesteps per control action: {timesteps_per_action}")
-except:
-    timesteps_per_action = 1
+    try:
+        Re_value = float(flow.DEFAULT_REYNOLDS)
+    except:
+        Re_value = 30.0
+        if VERBOSE:
+            print(f"Could not extract Re, using default: {Re_value}")
 
 # Test observation to get actual dimensions
 try:
@@ -60,61 +43,31 @@ try:
     test_obs = flow.get_observations()
     actual_obs_dim = len(test_obs) if isinstance(test_obs, (list, np.ndarray)) else 1
     if VERBOSE:
-        print(f"\nActual observation dimension: {actual_obs_dim}")
+        print(f"Actual observation dimension: {actual_obs_dim}")
 except Exception as e:
     if VERBOSE:
         print(f"Could not determine observation dimension: {e}")
-    actual_obs_dim = flow.OBS_DIM if hasattr(flow, 'OBS_DIM') else 6
+    actual_obs_dim = flow.OBS_DIM
 
 if VERBOSE:
-    print(f"Flow configuration:")
+    print(f"\nFlow configuration:")
     print(f"  Action dimension: {flow.ACT_DIM}")
+    print(f"  Observation dimension: {actual_obs_dim} (actual) vs {flow.OBS_DIM} (constant)")
+    print(f"  Reynolds number: {Re_value}")
 
 SAVE_DIR = "pinball_dataset_h5"
 os.makedirs(SAVE_DIR, exist_ok=True)
-save_path = os.path.join(SAVE_DIR, f"fluidic_pinball_Re{int(Re_value)}_data.h5")
+save_path = os.path.join(SAVE_DIR, "fluidic_pinball_data.h5")
+
+# TODO: UPDATE PARAMS AS NEEDED
+
+EPISODES = 2
+MAX_STEPS = 200
 
 if VERBOSE:
     print(f"\nGenerating dataset:")
     print(f"  Episodes: {EPISODES}")
     print(f"  Steps per episode: {MAX_STEPS}")
-    print(f"  Total timesteps per episode: {MAX_STEPS * timesteps_per_action}")
-
-def compute_f0_from_lift(cl_history, dt):
-    """
-    Compute dominant frequency f0 from lift coefficient time series using FFT
-    
-    Args:
-        cl_history: List of lift coefficient values over time
-        dt: Timestep size
-        
-    Returns:
-        f0: Dominant frequency (Hz)
-    """
-    if len(cl_history) < 10:
-        return np.nan
-    
-    try:
-        # Convert to numpy array
-        cl_array = np.array(cl_history)
-        
-        # Remove mean (detrend)
-        cl_detrended = cl_array - np.mean(cl_array)
-        
-        # Compute FFT
-        fft = np.fft.rfft(cl_detrended)
-        freqs = np.fft.rfftfreq(len(cl_detrended), d=dt)
-        
-        # Find dominant frequency (excluding DC component)
-        power = np.abs(fft[1:])**2
-        dominant_idx = np.argmax(power) + 1
-        f0 = freqs[dominant_idx]
-        
-        return f0
-    except Exception as e:
-        if VERBOSE:
-            print(f"Warning: Failed to compute f0: {e}")
-        return np.nan
 
 with h5py.File(save_path, "w") as f:
     
@@ -125,8 +78,6 @@ with h5py.File(save_path, "w") as f:
         
         try:
             flow.reset()
-            if VERBOSE:
-                print(f"\nEpisode {ep}: Flow initialized")
         except Exception as e:
             print(f"Episode {ep}: Failed to reset flow: {e}")
             continue
@@ -138,8 +89,8 @@ with h5py.File(save_path, "w") as f:
         next_obs_list = []
         act_list = []
         rew_list = []
-        cd_vec_list = []  # 3-element vector (one per cylinder)
-        cl_vec_list = []  # 3-element vector (one per cylinder)
+        cd_list = []
+        cl_list = []
         re_list = []
         done_list = []
         vorticity_list = []
@@ -147,10 +98,6 @@ with h5py.File(save_path, "w") as f:
         kinetic_energy_list = []
         timestep_list = []
         cumulative_reward_list = []
-        
-        # For f0 computation (need lift history for FFT)
-        cl2_history = []  # Lift on cylinder 2
-        cl3_history = []  # Lift on cylinder 3
         
         cumulative_reward = 0.0
         
@@ -164,7 +111,7 @@ with h5py.File(save_path, "w") as f:
                 obs = np.atleast_1d(obs).flatten()
                 # Ensure correct dimension
                 if len(obs) != actual_obs_dim:
-                    if VERBOSE and step == 0:
+                    if VERBOSE:
                         print(f"Episode {ep}, Step {step}: Observation dim mismatch: {len(obs)} vs {actual_obs_dim}")
                     obs = np.resize(obs, actual_obs_dim)
             except Exception as e:
@@ -210,7 +157,7 @@ with h5py.File(save_path, "w") as f:
                 next_obs = np.atleast_1d(next_obs).flatten()
                 # Ensure correct dimension
                 if len(next_obs) != actual_obs_dim:
-                    if VERBOSE and step == 0:
+                    if VERBOSE:
                         print(f"Episode {ep}, Step {step}: Next obs dim mismatch: {len(next_obs)} vs {actual_obs_dim}")
                     next_obs = np.resize(next_obs, actual_obs_dim)
             except Exception as e:
@@ -226,32 +173,16 @@ with h5py.File(save_path, "w") as f:
                     print(f"Episode {ep}, Step {step}: Failed to evaluate objective: {e}")
                 reward = np.nan
             
-            # Compute forces - returns tuple of (cd_vec, cl_vec) with 3 elements each
+            # Compute forces
             try:
                 forces = flow.compute_forces()
-                if isinstance(forces, (tuple, list)) and len(forces) >= 2:
-                    cd_vec = np.array(forces[0])  # 3-element array
-                    cl_vec = np.array(forces[1])  # 3-element array
-                    
-                    # Ensure they are 3-element arrays
-                    if len(cd_vec) != 3:
-                        cd_vec = np.full(3, np.nan)
-                    if len(cl_vec) != 3:
-                        cl_vec = np.full(3, np.nan)
-                    
-                    # Track lift history for f0 computation
-                    # CL[1] is cylinder 2, CL[2] is cylinder 3
-                    if len(cl_vec) >= 3:
-                        cl2_history.append(cl_vec[1])
-                        cl3_history.append(cl_vec[2])
-                else:
-                    cd_vec = np.full(3, np.nan)
-                    cl_vec = np.full(3, np.nan)
+                cd = forces.get('Cd', np.nan) if isinstance(forces, dict) else np.nan
+                cl = forces.get('Cl', np.nan) if isinstance(forces, dict) else np.nan
             except Exception as e:
                 if VERBOSE:
                     print(f"Episode {ep}, Step {step}: Failed to compute forces: {e}")
-                cd_vec = np.full(3, np.nan)
-                cl_vec = np.full(3, np.nan)
+                cd = np.nan
+                cl = np.nan
             
             # Compute vorticity
             try:
@@ -300,8 +231,8 @@ with h5py.File(save_path, "w") as f:
             next_obs_list.append(next_obs)
             act_list.append(action)
             rew_list.append(reward)
-            cd_vec_list.append(cd_vec)  # Store full 3-element vector
-            cl_vec_list.append(cl_vec)  # Store full 3-element vector
+            cd_list.append(cd)
+            cl_list.append(cl)
             re_list.append(Re_value)
             done_list.append(done)
             vorticity_list.append(vort_value)
@@ -310,17 +241,12 @@ with h5py.File(save_path, "w") as f:
             timestep_list.append(step)
             cumulative_reward_list.append(cumulative_reward)
 
-        # Compute f0 from lift history
-        dt = flow.DEFAULT_DT * timesteps_per_action
-        f0_cyl2 = compute_f0_from_lift(cl2_history, dt)
-        f0_cyl3 = compute_f0_from_lift(cl3_history, dt)
-        f0 = np.mean([f for f in [f0_cyl2, f0_cyl3] if not np.isnan(f)]) if any(not np.isnan(f) for f in [f0_cyl2, f0_cyl3]) else np.nan
-        
-        if VERBOSE:
-            print(f"Episode {ep}: Computed f0 = {f0:.4f} Hz (cyl2: {f0_cyl2:.4f}, cyl3: {f0_cyl3:.4f})")
-
         # Save all datasets
         try:
+            # For variable-length arrays, we need to use special dtype or store as object arrays
+            # Option 1: Store flattened with length metadata
+            # Option 2: Use HDF5 variable-length dtype
+            
             # Create arrays to track dimensions
             obs_lengths = np.array([len(o) for o in obs_list])
             next_obs_lengths = np.array([len(o) for o in next_obs_list])
@@ -331,14 +257,10 @@ with h5py.File(save_path, "w") as f:
             next_obs_flat = np.concatenate(next_obs_list)
             act_flat = np.concatenate(act_list)
             
-            # CD and CL are fixed 3-element vectors, store as 2D array (steps x 3)
-            cd_array = np.array(cd_vec_list)  # Shape: (MAX_STEPS, 3)
-            cl_array = np.array(cl_vec_list)  # Shape: (MAX_STEPS, 3)
-            
             if VERBOSE:
-                print(f"Episode {ep}: Data shapes - obs: {obs_flat.shape}, CD: {cd_array.shape}, CL: {cl_array.shape}")
+                print(f"Episode {ep}: Variable-length data - obs lengths: {np.unique(obs_lengths)}, action lengths: {np.unique(act_lengths)}")
             
-            # Save flattened observation/action data and length metadata
+            # Save flattened data and length metadata
             grp.create_dataset("obs_flat", data=obs_flat, compression="gzip")
             grp.create_dataset("obs_lengths", data=obs_lengths, compression="gzip")
             grp.create_dataset("next_obs_flat", data=next_obs_flat, compression="gzip")
@@ -346,17 +268,10 @@ with h5py.File(save_path, "w") as f:
             grp.create_dataset("actions_flat", data=act_flat, compression="gzip")
             grp.create_dataset("actions_lengths", data=act_lengths, compression="gzip")
             
-            # Save force vectors as 2D arrays
-            grp.create_dataset("CD_vec", data=cd_array, compression="gzip")  # (steps, 3)
-            grp.create_dataset("CL_vec", data=cl_array, compression="gzip")  # (steps, 3)
-            
-            # Also save individual components for convenience
-            grp.create_dataset("CD_total", data=np.sum(cd_array, axis=1), compression="gzip")
-            grp.create_dataset("CL2", data=cl_array[:, 1], compression="gzip")  # Cylinder 2
-            grp.create_dataset("CL3", data=cl_array[:, 2], compression="gzip")  # Cylinder 3
-            
-            # Scalar data
+            # Scalar data can be stored normally
             grp.create_dataset("rewards", data=np.array(rew_list), compression="gzip")
+            grp.create_dataset("Cd", data=np.array(cd_list), compression="gzip")
+            grp.create_dataset("Cl", data=np.array(cl_list), compression="gzip")
             grp.create_dataset("Re", data=np.array(re_list), compression="gzip")
             grp.create_dataset("done", data=np.array(done_list), compression="gzip")
             grp.create_dataset("vorticity", data=np.array(vorticity_list), compression="gzip")
@@ -365,21 +280,16 @@ with h5py.File(save_path, "w") as f:
             grp.create_dataset("timestep", data=np.array(timestep_list), compression="gzip")
             grp.create_dataset("cumulative_reward", data=np.array(cumulative_reward_list), compression="gzip")
             
-            # Store metadata about array structure and f0
+            # Store metadata about array structure
             grp.attrs['num_steps'] = len(obs_list)
-            grp.attrs['obs_dim'] = actual_obs_dim
-            grp.attrs['act_dim'] = flow.ACT_DIM
-            grp.attrs['Re'] = Re_value
-            grp.attrs['f0'] = f0
-            grp.attrs['f0_cyl2'] = f0_cyl2
-            grp.attrs['f0_cyl3'] = f0_cyl3
-            grp.attrs['dt'] = dt
+            grp.attrs['obs_dim_range'] = f"{obs_lengths.min()}-{obs_lengths.max()}"
+            grp.attrs['act_dim_range'] = f"{act_lengths.min()}-{act_lengths.max()}"
             
         except Exception as e:
             print(f"Episode {ep}: Failed to save datasets: {e}")
             if VERBOSE:
-                import traceback
-                traceback.print_exc()
+                print(f"  obs_list length: {len(obs_list)}, sample shapes: {[o.shape for o in obs_list[:3]]}")
+                print(f"  act_list length: {len(act_list)}, sample shapes: {[a.shape for a in act_list[:3]]}")
             continue
 
         ep_time = time.time() - ep_start
@@ -409,18 +319,10 @@ if VERBOSE:
     print("    - obs_flat + obs_lengths (reconstruct with cumsum)")
     print("    - next_obs_flat + next_obs_lengths")
     print("    - actions_flat + actions_lengths")
-    print("  Force vectors (fixed 3-element per step):")
-    print("    - CD_vec (steps x 3): drag on each cylinder")
-    print("    - CL_vec (steps x 3): lift on each cylinder")
-    print("    - CD_total: sum of CD_vec")
-    print("    - CL2: lift on cylinder 2")
-    print("    - CL3: lift on cylinder 3")
-    print("  Scalars per step:")
-    print("    - rewards, Re, done, vorticity, pressure")
-    print("    - kinetic_energy, timestep, cumulative_reward")
-    print("  Episode attributes:")
-    print("    - f0: dominant frequency (Hz)")
-    print("    - f0_cyl2, f0_cyl3: per-cylinder frequencies")
+    print("  Fixed-length scalars:")
+    print("    - rewards, Cd, Cl, Re, done")
+    print("    - vorticity, pressure, kinetic_energy")
+    print("    - timestep, cumulative_reward")
     print("\nTo reconstruct variable-length arrays:")
     print("  offsets = np.concatenate([[0], np.cumsum(lengths[:-1])])")
     print("  arrays = [flat[offset:offset+length] for offset, length in zip(offsets, lengths)]")
