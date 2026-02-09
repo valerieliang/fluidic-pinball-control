@@ -4,18 +4,19 @@ This project uses a custom Docker image based on Firedrake.
 
 ## Build and run:
 
+Initial build:
 ```
 docker compose up --build
 ```
 
-## If already built:
-
+If already built:
 ```
 docker compose up
 ```
 
-## In a new terminal, enter:
+## Start Docker Container:
 
+In a new terminal, enter:
 ```
 docker exec -it hydrogym /bin/bash
 source /home/firedrake/firedrake/bin/activate
@@ -26,37 +27,35 @@ source /home/firedrake/firedrake/bin/activate
 - Exit container with `exit`
 - All dependencies are installed inside the Docker image
 
-# Docker
+## Using Jupyter Notebook:
 
-This project uses a custom Docker image based on Firedrake.
-
-## Build and run:
-
+Install dependencies:
 ```
-docker compose up --build
+pip install jupyterlab notebook ipykernel
 ```
 
-## If already built:
-
+If first time: create kernel:
 ```
-docker compose up
-```
-
-## In a new terminal, enter:
-
-```
-docker exec -it hydrogym /bin/bash
-source /home/firedrake/firedrake/bin/activate
+python -m ipykernel install --user --name firedrake --display-name "Firedrake"
 ```
 
-### Test: view hydrogym demo:
+### Start Jupyter in Docker:
 
+Run:
 ```
-cd hydrogym/examples/demo
-python3 run-transient.py
+jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
 ```
 
-## Notes:
+You’ll see output like:
+```
+http://127.0.0.1:8888/?token=abc123...
+```
+Copy the token.
 
-- Exit container with `exit`
-- All dependencies are installed inside the Docker image
+### Using the notebook:
+
+In your web browser, go to: 
+```
+http://localhost:8888
+```
+and open your desired notebook.
