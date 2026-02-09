@@ -22,11 +22,6 @@ docker exec -it hydrogym /bin/bash
 source /home/firedrake/firedrake/bin/activate
 ```
 
-## Notes:
-
-- Exit container with `exit`
-- All dependencies are installed inside the Docker image
-
 ## Using Jupyter Notebook:
 
 Install dependencies:
@@ -45,17 +40,9 @@ Run:
 ```
 jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
 ```
+Follow the output in the terminal to use the notebook.
 
-You’ll see output like:
-```
-http://127.0.0.1:8888/?token=abc123...
-```
-Copy the token.
+## Notes:
 
-### Using the notebook:
-
-In your web browser, go to: 
-```
-http://localhost:8888
-```
-and open your desired notebook.
+- Exit container with `exit`
+- All dependencies are installed inside the Docker image
