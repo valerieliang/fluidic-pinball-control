@@ -1,0 +1,156 @@
+============================================================
+HydroGym Diagnostic Tool
+============================================================
+
+1. Checking HydroGym import...
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality. 
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+/home/firedrake/firedrake/src/firedrake/firedrake/function.py:326: FutureWarning: The .split() method is deprecated, please use the .subfunctions property instead       
+  warnings.warn("The .split() method is deprecated, please use the .subfunctions property instead", category=FutureWarning)
+✓ Flow and solver initialized successfully
+  - Flow has ACT_DIM: True
+  - Flow has OBS_DIM: True
+  - Flow has MAX_CONTROL: True
+  - Flow has Re: True
+  - Action dimension: 3
+  - Reynolds number: [30.]
+
+3. Testing force computation...
+
+  Running initialization timesteps...
+✓ Force computation successful
+  - Forces type: <class 'tuple'>
+  - Forces value: ([0.005877133312940046, -0.6623545345637808, 0.6611705953327823], [2.703282877160937, 4.7241627968938955, 4.736068816536142])
+  - CD: [0.005877133312940046, -0.6623545345637808, 0.6611705953327823]
+  - CL: [2.703282877160937, 4.7241627968938955, 4.736068816536142]
+✗ Force computation failed: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
+Traceback (most recent call last):
+  File "/home/firedrake/workspace/diagnose_hydrogym.py", line 71, in test_force_computation
+    if cd is not None and not np.isnan(cd):
+ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
+
+============================================================
+Expected values from Table SI 4 (Re=100, 2D Pinball):
+============================================================
+  f0 (frequency):  0.088
+  CD (drag):       2.904
+  CL,2 (lift):    -0.079
+  CL,3 (lift):     0.110
+
+Note: These are time-averaged values for the uncontrolled case
+============================================================
+
+============================================================
+Diagnostic complete!
+============================================================
+(firedrake) root@554f3ba56049:/home/firedrake/workspace# python3 pinball_dataset_collection_fixed.py --verbose --episodes 1 --steps 50 --reynolds 100
+python3: can't open file '/home/firedrake/workspace/pinball_dataset_collection_fixed.py': [Errno 2] No such file or directory
+(firedrake) root@554f3ba56049:/home/firedrake/workspace# python3 pinball_dataset_collection.py --verbose --episodes 1 --steps 50 --reynolds 100
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+/home/firedrake/firedrake/lib/python3.10/site-packages/pytools/__init__.py:2484: UserWarning: unable to find git revision
+  warn("unable to find git revision")
+============================================================
+Data Collection for RL Training - Fluidic Pinball
+============================================================
+Target Reynolds Number: 100.0
+/home/firedrake/firedrake/src/firedrake/firedrake/function.py:326: FutureWarning: The .split() method is deprecated, please use the .subfunctions property instead
+  warnings.warn("The .split() method is deprecated, please use the .subfunctions property instead", category=FutureWarning)
+Flow and solver created successfully
+  Timestep: 0.01
+
+Reynolds number: 100.0
+  Timesteps per control action: 225
+
+Actual observation dimension: 6
+Flow configuration:
+  Action dimension: 3
+
+Generating dataset:
+  Episodes: 1
+  Steps per episode: 50
+  Total timesteps per episode: 11250
+
+Episode 0: Flow initialized
+Episode 0, Step 0: Failed to step solver: Nonlinear solve failed to converge after 0 nonlinear iterations.
+Reason:
+   DIVERGED_LINEAR_SOLVE
+Episode 0: Failed to save datasets: need at least one array to concatenate
+
+============================================================
+Dataset complete!
+  Total time: 0.4 minutes
+  Total transitions: 50
+  Saved to: pinball_dataset_h5/fluidic_pinball_Re100_data.h5
+============================================================
+WARNING! There are options you set that were not used!
+WARNING! could be spelling mistake, etc!
+There are 8 unused database options. They are:
+Option left: name:--episodes value: 1 source: command line
+Option left: name:--reynolds value: 100 source: command line
+Option left: name:--steps value: 50 source: command line
+Option left: name:--verbose (no value) source: command line
+Option left: name:-episodes value: 1 source: code
+Option left: name:-reynolds value: 100 source: code
+Option left: name:-steps value: 50 source: code
+Option left: name:-verbose (no value) source: code
+(firedrake) root@554f3ba56049:/home/firedrake/workspace# python diagnose_hydrogym.py
+============================================================
+HydroGym Diagnostic Tool
+============================================================
+
+1. Checking HydroGym import...
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+/home/firedrake/firedrake/lib/python3.10/site-packages/pytools/__init__.py:2484: UserWarning: unable to find git revision
+  warn("unable to find git revision")
+OK: HydroGym imported successfully
+
+2. Checking flow initialization...
+/home/firedrake/firedrake/src/firedrake/firedrake/function.py:326: FutureWarning: The .split() method is deprecated, please use the .subfunctions property instead
+  warnings.warn("The .split() method is deprecated, please use the .subfunctions property instead", category=FutureWarning)
+OK: Flow and solver initialized successfully
+  - Flow has ACT_DIM: True
+  - Flow has OBS_DIM: True
+  - Flow has MAX_CONTROL: True
+  - Flow has Re: True
+  - Action dimension: 3
+  - Reynolds number: [30.]
+
+3. Testing force computation...
+
+  Running initialization timesteps...
+OK: Force computation successful
+  - Forces type: <class 'tuple'>
+  - Forces value: ([0.005877133312940046, -0.6623545345637808, 0.6611705953327823], [2.703282877160937, 4.7241627968938955, 4.736068816536142])
+  - CD: [0.005877133312940046, -0.6623545345637808, 0.6611705953327823]
+  - CL: [2.703282877160937, 4.7241627968938955, 4.736068816536142]
+  - CD is array with 3 elements (one per cylinder)
+    CD values: [ 0.00587713 -0.66235453  0.6611706 ]
+    Total CD: 0.005
+OK: All CD values are valid
+  - CL is array with 3 elements (one per cylinder)
+    CL values: [2.70328288 4.7241628  4.73606882]
+OK: All CL values are valid
+
+============================================================
+Expected values from Table SI 4 (Re=100, 2D Pinball):
+============================================================
+  f0 (frequency):  0.088
+  CD (drag):       2.904
+  CL,2 (lift):    -0.079
+  CL,3 (lift):     0.110
+
+Note: These are time-averaged values for the uncontrolled case
+============================================================
+
+============================================================
+Diagnostic complete!
+============================================================
+(firedrake) root@554f3ba56049:/home/firedrake/workspace# 
