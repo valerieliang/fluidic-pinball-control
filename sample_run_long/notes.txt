@@ -89,3 +89,5 @@ Running Pinball Re=100 for 8000 steps (t=80.0s)...
   t= 77.00s | reward=-0.03531 | CD=0.9609 | CL2=0.0899 | CL3=-0.0901
   t= 78.00s | reward=-0.03531 | CD=0.9609 | CL2=0.0899 | CL3=-0.0901
   t= 79.00s | reward=-0.03532 | CD=0.9609 | CL2=0.0899 | CL3=-0.0900
+
+  Note: shedding not observed 
