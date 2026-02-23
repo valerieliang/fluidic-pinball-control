@@ -187,3 +187,7 @@ pip install .
 ```bash
 python -c "import hydrogym.firedrake as hgym; print('All good!')"
 ```
+
+# To run venv in later sessions:
+
+source ~/venv-firedrake/bin/activate
