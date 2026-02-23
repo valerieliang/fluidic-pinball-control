@@ -1,0 +1,17 @@
+(venv-firedrake) valval@shrimpfriedrice:~/fluidic-pinball-control$ python introduction.py 
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+Running for 200 steps (t=2.0s)...
+  t=  0.0s | reward=-15.4296 | drag_1=452.9955
+  t=  0.5s | reward=-0.0882 | drag_1=1.9070
+  t=  1.0s | reward=-0.0716 | drag_1=1.6171
+  t=  1.5s | reward=-0.0635 | drag_1=1.5817
+/home/valval/fluidic-pinball-control/introduction.py:94: UserWarning: FigureCanvasAgg is non-interactive, and thus cannot be shown
+  plt.show()
+Plots saved!
+(venv-firedrake) valval@shrimpfriedrice:~/fluidic-pinball-control$ 
+
+dt = 1e-2
+num_steps = 200
