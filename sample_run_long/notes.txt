@@ -1,0 +1,91 @@
+dt = 1e-2
+num_steps = 8000
+Re = 100
+
+(venv-firedrake) valval@shrimpfriedrice:~/fluidic-pinball-control$ python introduction.py 
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+Running Pinball Re=100 for 8000 steps (t=80.0s)...
+  obs[0]=-0.005 obs[1]=-50.234 obs[2]=50.256 obs[3]=442.134 obs[4]=529.329 obs[5]=529.346
+  t=  0.00s | reward=-15.00809 | CD=442.1337 | CL2=-50.2336 | CL3=50.2557
+  t=  1.00s | reward=-0.04970 | CD=0.9105 | CL2=0.6624 | CL3=-0.6626
+  t=  2.00s | reward=-0.04457 | CD=0.9675 | CL2=0.6478 | CL3=-0.6480
+  t=  3.00s | reward=-0.04358 | CD=1.0686 | CL2=0.0392 | CL3=-0.0394
+  t=  4.00s | reward=-0.04372 | CD=1.0939 | CL2=-0.3025 | CL3=0.3023
+  t=  5.00s | reward=-0.04264 | CD=1.0591 | CL2=-0.2252 | CL3=0.2250
+  t=  6.00s | reward=-0.03988 | CD=1.0042 | CL2=0.0682 | CL3=-0.0684
+  t=  7.00s | reward=-0.03775 | CD=0.9713 | CL2=0.2570 | CL3=-0.2572
+  t=  8.00s | reward=-0.03695 | CD=0.9710 | CL2=0.2397 | CL3=-0.2399
+  t=  9.00s | reward=-0.03682 | CD=0.9808 | CL2=0.1283 | CL3=-0.1284
+  t= 10.00s | reward=-0.03680 | CD=0.9846 | CL2=0.0410 | CL3=-0.0412
+  t= 11.00s | reward=-0.03658 | CD=0.9785 | CL2=0.0313 | CL3=-0.0315
+  t= 12.00s | reward=-0.03613 | CD=0.9681 | CL2=0.0803 | CL3=-0.0805
+  t= 13.00s | reward=-0.03572 | CD=0.9615 | CL2=0.1270 | CL3=-0.1272
+  t= 14.00s | reward=-0.03556 | CD=0.9619 | CL2=0.1286 | CL3=-0.1288
+  t= 15.00s | reward=-0.03557 | CD=0.9651 | CL2=0.0962 | CL3=-0.0964
+  t= 16.00s | reward=-0.03557 | CD=0.9661 | CL2=0.0670 | CL3=-0.0672
+  t= 17.00s | reward=-0.03547 | CD=0.9633 | CL2=0.0630 | CL3=-0.0632
+  t= 18.00s | reward=-0.03529 | CD=0.9591 | CL2=0.0796 | CL3=-0.0798
+  t= 19.00s | reward=-0.03513 | CD=0.9564 | CL2=0.0977 | CL3=-0.0979
+  t= 20.00s | reward=-0.03506 | CD=0.9564 | CL2=0.1022 | CL3=-0.1024
+  t= 21.00s | reward=-0.03508 | CD=0.9578 | CL2=0.0933 | CL3=-0.0935
+  t= 22.00s | reward=-0.03510 | CD=0.9587 | CL2=0.0827 | CL3=-0.0829
+  t= 23.00s | reward=-0.03508 | CD=0.9580 | CL2=0.0799 | CL3=-0.0801
+  t= 24.00s | reward=-0.03502 | CD=0.9564 | CL2=0.0855 | CL3=-0.0857
+  t= 25.00s | reward=-0.03495 | CD=0.9552 | CL2=0.0929 | CL3=-0.0931
+  t= 26.00s | reward=-0.03492 | CD=0.9550 | CL2=0.0960 | CL3=-0.0961
+  t= 27.00s | reward=-0.03494 | CD=0.9557 | CL2=0.0934 | CL3=-0.0936
+  t= 28.00s | reward=-0.03497 | CD=0.9565 | CL2=0.0888 | CL3=-0.0890
+  t= 29.00s | reward=-0.03499 | CD=0.9567 | CL2=0.0866 | CL3=-0.0867
+  t= 30.00s | reward=-0.03498 | CD=0.9564 | CL2=0.0881 | CL3=-0.0883
+  t= 31.00s | reward=-0.03497 | CD=0.9559 | CL2=0.0913 | CL3=-0.0914
+  t= 32.00s | reward=-0.03496 | CD=0.9558 | CL2=0.0931 | CL3=-0.0933
+  t= 33.00s | reward=-0.03497 | CD=0.9562 | CL2=0.0924 | CL3=-0.0926
+  t= 34.00s | reward=-0.03500 | CD=0.9567 | CL2=0.0902 | CL3=-0.0904
+  t= 35.00s | reward=-0.03502 | CD=0.9571 | CL2=0.0886 | CL3=-0.0887
+  t= 36.00s | reward=-0.03503 | CD=0.9572 | CL2=0.0887 | CL3=-0.0889
+  t= 37.00s | reward=-0.03504 | CD=0.9572 | CL2=0.0902 | CL3=-0.0903
+  t= 38.00s | reward=-0.03505 | CD=0.9572 | CL2=0.0914 | CL3=-0.0916
+  t= 39.00s | reward=-0.03506 | CD=0.9574 | CL2=0.0914 | CL3=-0.0916
+  t= 40.00s | reward=-0.03507 | CD=0.9577 | CL2=0.0904 | CL3=-0.0906
+  t= 41.00s | reward=-0.03509 | CD=0.9581 | CL2=0.0894 | CL3=-0.0895
+  t= 42.00s | reward=-0.03511 | CD=0.9582 | CL2=0.0891 | CL3=-0.0893
+  t= 43.00s | reward=-0.03512 | CD=0.9583 | CL2=0.0897 | CL3=-0.0899
+  t= 44.00s | reward=-0.03513 | CD=0.9584 | CL2=0.0905 | CL3=-0.0907
+  t= 45.00s | reward=-0.03514 | CD=0.9586 | CL2=0.0908 | CL3=-0.0910
+  t= 46.00s | reward=-0.03515 | CD=0.9588 | CL2=0.0904 | CL3=-0.0906
+  t= 47.00s | reward=-0.03517 | CD=0.9591 | CL2=0.0898 | CL3=-0.0900
+  t= 48.00s | reward=-0.03518 | CD=0.9592 | CL2=0.0895 | CL3=-0.0897
+  t= 49.00s | reward=-0.03519 | CD=0.9593 | CL2=0.0897 | CL3=-0.0898
+  t= 50.00s | reward=-0.03520 | CD=0.9594 | CL2=0.0901 | CL3=-0.0903
+  t= 51.00s | reward=-0.03521 | CD=0.9595 | CL2=0.0904 | CL3=-0.0906
+  t= 52.00s | reward=-0.03522 | CD=0.9597 | CL2=0.0903 | CL3=-0.0905
+  t= 53.00s | reward=-0.03523 | CD=0.9598 | CL2=0.0900 | CL3=-0.0902
+  t= 54.00s | reward=-0.03524 | CD=0.9600 | CL2=0.0897 | CL3=-0.0899
+  t= 55.00s | reward=-0.03525 | CD=0.9601 | CL2=0.0897 | CL3=-0.0899
+  t= 56.00s | reward=-0.03525 | CD=0.9601 | CL2=0.0899 | CL3=-0.0901
+  t= 57.00s | reward=-0.03526 | CD=0.9602 | CL2=0.0901 | CL3=-0.0903
+  t= 58.00s | reward=-0.03526 | CD=0.9603 | CL2=0.0902 | CL3=-0.0903
+  t= 59.00s | reward=-0.03527 | CD=0.9604 | CL2=0.0900 | CL3=-0.0902
+  t= 60.00s | reward=-0.03528 | CD=0.9605 | CL2=0.0899 | CL3=-0.0900
+  t= 61.00s | reward=-0.03528 | CD=0.9605 | CL2=0.0898 | CL3=-0.0900
+  t= 62.00s | reward=-0.03529 | CD=0.9606 | CL2=0.0898 | CL3=-0.0900
+  t= 63.00s | reward=-0.03529 | CD=0.9606 | CL2=0.0900 | CL3=-0.0901
+  t= 64.00s | reward=-0.03529 | CD=0.9606 | CL2=0.0900 | CL3=-0.0902
+  t= 65.00s | reward=-0.03529 | CD=0.9607 | CL2=0.0900 | CL3=-0.0902
+  t= 66.00s | reward=-0.03530 | CD=0.9607 | CL2=0.0899 | CL3=-0.0901
+  t= 67.00s | reward=-0.03530 | CD=0.9607 | CL2=0.0898 | CL3=-0.0900
+  t= 68.00s | reward=-0.03530 | CD=0.9608 | CL2=0.0898 | CL3=-0.0900
+  t= 69.00s | reward=-0.03530 | CD=0.9608 | CL2=0.0899 | CL3=-0.0901
+  t= 70.00s | reward=-0.03531 | CD=0.9608 | CL2=0.0900 | CL3=-0.0901
+  t= 71.00s | reward=-0.03531 | CD=0.9608 | CL2=0.0900 | CL3=-0.0901
+  t= 72.00s | reward=-0.03531 | CD=0.9608 | CL2=0.0899 | CL3=-0.0901
+  t= 73.00s | reward=-0.03531 | CD=0.9609 | CL2=0.0899 | CL3=-0.0900
+  t= 74.00s | reward=-0.03531 | CD=0.9609 | CL2=0.0899 | CL3=-0.0900
+  t= 75.00s | reward=-0.03531 | CD=0.9609 | CL2=0.0899 | CL3=-0.0900
+  t= 76.00s | reward=-0.03531 | CD=0.9609 | CL2=0.0899 | CL3=-0.0901
+  t= 77.00s | reward=-0.03531 | CD=0.9609 | CL2=0.0899 | CL3=-0.0901
+  t= 78.00s | reward=-0.03531 | CD=0.9609 | CL2=0.0899 | CL3=-0.0901
+  t= 79.00s | reward=-0.03532 | CD=0.9609 | CL2=0.0899 | CL3=-0.0900
