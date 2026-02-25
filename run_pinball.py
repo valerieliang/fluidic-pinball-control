@@ -1,5 +1,5 @@
 """
-run_pinball_v2.py
+run_pinball.py
 =================
 Fluidic Pinball simulation with efficient on-disk output.
 
