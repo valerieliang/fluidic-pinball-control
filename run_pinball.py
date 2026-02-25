@@ -115,26 +115,6 @@ h5.flush()
 h5.close()
 print(f"\nDone. {write_ptr} steps written to {HDF5_FILE}")
 
-# ─── Stitch PNGs into video ───────────────────────────────────────────────────
-video_out = "pinball.mp4"
-print(f"\nRendering video -> {video_out} ...")
-result = subprocess.run([
-    "ffmpeg", "-y",
-    "-framerate", str(VIDEO_FPS),
-    "-pattern_type", "glob",
-    "-i", f"{PNG_DIR}/vort_*.png",
-    "-c:v", "libx264",
-    "-pix_fmt", "yuv420p",
-    "-crf", "20",
-    video_out
-], capture_output=True, text=True)
-
-if result.returncode == 0:
-    print(f"Video saved: {video_out}")
-else:
-    print("ffmpeg failed -- PNGs are still in snapshots/")
-    print(result.stderr[-500:])
-
 # ─── Summary timeseries plot ──────────────────────────────────────────────────
 with h5py.File(HDF5_FILE, "r") as f:
     time  = f["timeseries/time"][:]
