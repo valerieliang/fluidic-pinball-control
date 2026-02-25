@@ -1,17 +1,3 @@
-"""
-run_pinball.py
-=================
-Fluidic Pinball simulation with efficient on-disk output.
-
-Memory strategy:
-  - Vorticity fields  → written incrementally to XDMF (Paraview-compatible)
-                        never accumulated in RAM
-  - Scalar timeseries → written to HDF5 in chunks, pre-allocated
-  - PNG snapshots     → rendered and saved immediately, figure closed
-
-Tune the knobs at the top of the file.
-"""
-
 import hydrogym.firedrake as hgym
 import firedrake as fd
 from firedrake.pyplot import tricontourf
@@ -21,20 +7,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 import h5py
 import os
+import subprocess
 
 # ─── Knobs ────────────────────────────────────────────────────────────────────
-Re            = 100          
+Re            = 100          # higher Re = richer shedding 
 dt            = 1e-2
-TOTAL_STEPS   = 50_000       # t = 500 s at dt=0.01
-FIELD_EVERY   = 10           # save vorticity field every N steps
-PNG_EVERY     = 500          # render a PNG every N steps
+TOTAL_STEPS   = 50_000       # t = 500s at dt=0.01
+PNG_EVERY     = 10           # render a vorticity PNG every N steps
 PRINT_EVERY   = 200
 
-XDMF_FILE     = "pinball_vorticity.xdmf"   # Paraview-compatible field output
-HDF5_FILE     = "pinball_timeseries.h5"    # scalar timeseries
-PNG_DIR       = "snapshots"                # directory for PNG frames
+HDF5_FILE     = "pinball_timeseries.h5"
+PNG_DIR       = "snapshots"
 
 NOISE_AMP     = 0.002        # small symmetry-breaking perturbation
+VIDEO_FPS     = 30           # for final ffmpeg video
 # ──────────────────────────────────────────────────────────────────────────────
 
 os.makedirs(PNG_DIR, exist_ok=True)
@@ -49,7 +35,7 @@ env_config = {
 env = hgym.FlowEnv(env_config)
 
 # ─── Small symmetry-breaking perturbation ─────────────────────────────────────
-print("Applying symmetry-breaking perturbation (amplitude={NOISE_AMP})...")
+print(f"Applying symmetry-breaking perturbation (amplitude={NOISE_AMP})...")
 u, p = env.flow.q.subfunctions
 noise = fd.Function(u.function_space())
 np.random.seed(42)
@@ -57,15 +43,11 @@ noise.dat.data[:] = NOISE_AMP * np.random.randn(*noise.dat.data.shape)
 u.assign(u + noise)
 print("Done.\n")
 
-# ─── Pre-compute vorticity function space ─────────────────────────────────────
+# ─── Vorticity function space (reuse across steps) ────────────────────────────
 V_cg1     = fd.FunctionSpace(env.flow.mesh, "CG", 1)
 vorticity = fd.Function(V_cg1, name="vorticity")
 
-# ─── XDMF writer (incremental, no RAM buildup) ────────────────────────────────
-xdmf = fd.File(XDMF_FILE)   # Firedrake appends on each .write() call
-
-# ─── Pre-allocate HDF5 timeseries (avoids repeated resize) ────────────────────
-n_steps = TOTAL_STEPS
+# ─── Pre-allocate HDF5 timeseries ─────────────────────────────────────────────
 scalar_keys = ["time", "reward", "CL1", "CL2", "CL3", "CD1", "CD2", "CD3", "drag_total"]
 
 h5 = h5py.File(HDF5_FILE, "w")
@@ -73,44 +55,41 @@ meta = h5.create_group("metadata")
 meta.attrs["Re"]          = Re
 meta.attrs["dt"]          = dt
 meta.attrs["total_steps"] = TOTAL_STEPS
-meta.attrs["field_every"] = FIELD_EVERY
 ts  = h5.create_group("timeseries")
 ds  = {}
 for key in scalar_keys:
-    # chunk by 1000 rows; gzip level 4 gives ~3× compression with low CPU cost
-    ds[key] = ts.create_dataset(key, shape=(n_steps,), dtype="f4",
+    ds[key] = ts.create_dataset(key, shape=(TOTAL_STEPS,), dtype="f4",
                                 chunks=(1000,), compression="gzip",
                                 compression_opts=4)
-write_ptr = 0   # index into HDF5 datasets
+write_ptr = 0
 
-# ─── Plotting helper ──────────────────────────────────────────────────────────
+# ─── Plotting setup ───────────────────────────────────────────────────────────
 VORT_LEVELS = np.linspace(-3, 3, 60)
 
-def save_png(step, t):
+def save_png(step, t, u):
     vorticity.assign(fd.project(fd.curl(u), V_cg1))
     fig, ax = plt.subplots(figsize=(12, 4))
     tricontourf(vorticity, levels=VORT_LEVELS, axes=ax, cmap="RdBu_r", extend="both")
-    ax.set_aspect("equal"); ax.set_xlim(-2, 18)
-    ax.set_title(f"Vorticity  Re={Re}  t={t:.1f}s  step={step}")
-    ax.set_xlabel("x"); ax.set_ylabel("y")
+    ax.set_aspect("equal")
+    ax.set_xlim(-2, 18)
+    ax.set_title(f"Vorticity  Re={Re}  t={t:.2f}s  step={step}")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
     plt.tight_layout()
     fpath = os.path.join(PNG_DIR, f"vort_{step:06d}.png")
-    plt.savefig(fpath, dpi=120)
-    plt.close(fig)   # ← critical: releases memory immediately
-    return fpath
+    plt.savefig(fpath, dpi=100)
+    plt.close(fig)   # critical — releases memory immediately
 
 # ─── Main loop ────────────────────────────────────────────────────────────────
-print(f"Running Pinball Re={Re} for {TOTAL_STEPS} steps "
-      f"(t={TOTAL_STEPS*dt:.0f}s)\n"
-      f"  Fields → {XDMF_FILE}  (every {FIELD_EVERY} steps)\n"
-      f"  PNGs   → {PNG_DIR}/   (every {PNG_EVERY} steps)\n"
-      f"  Scalars→ {HDF5_FILE}\n")
+print(f"Running Pinball Re={Re} for {TOTAL_STEPS} steps (t={TOTAL_STEPS*dt:.0f}s)")
+print(f"  PNGs    -> {PNG_DIR}/ every {PNG_EVERY} steps")
+print(f"  Scalars -> {HDF5_FILE}\n")
 
 for i in range(TOTAL_STEPS):
     obs, reward, done, info = env.step([0.0, 0.0, 0.0])
     t = (i + 1) * dt
 
-    # ── Write scalars ──
+    # Write scalars directly into pre-allocated HDF5 (no list growth)
     ds["time"][write_ptr]       = t
     ds["reward"][write_ptr]     = reward
     ds["CL1"][write_ptr]        = obs[0]
@@ -122,45 +101,54 @@ for i in range(TOTAL_STEPS):
     ds["drag_total"][write_ptr] = obs[3] + obs[4] + obs[5]
     write_ptr += 1
 
-    # ── Write vorticity field to XDMF ──
-    if i % FIELD_EVERY == 0:
-        vorticity.assign(fd.project(fd.curl(u), V_cg1))
-        xdmf.write(vorticity, time=t)
-
-    # ── Render PNG snapshot ──
+    # Render PNG and close figure immediately
     if i % PNG_EVERY == 0:
-        fpath = save_png(i, t)
-        print(f"  [PNG] saved {fpath}")
+        save_png(i, t, u)
 
-    # ── Console progress ──
     if i % PRINT_EVERY == 0:
-        cl2_std = np.std(ds["CL2"][max(0, write_ptr-500):write_ptr]) if write_ptr > 10 else 0
+        cl2_std = float(np.std(ds["CL2"][max(0, write_ptr-500):write_ptr])) if write_ptr > 10 else 0.0
         print(f"  t={t:7.1f}s | CD1={obs[3]:.4f} | CL2={obs[1]:.5f} | "
               f"CL2_std(500)={cl2_std:.4f} | reward={reward:.5f}")
 
-# ─── Flush and close HDF5 ─────────────────────────────────────────────────────
+# ─── Close HDF5 ───────────────────────────────────────────────────────────────
 h5.flush()
 h5.close()
-print(f"\nDone. Wrote {write_ptr} timesteps.")
-print(f"  XDMF:    {XDMF_FILE}  (open in Paraview)")
-print(f"  HDF5:    {HDF5_FILE}")
-print(f"  PNGs:    {PNG_DIR}/ ({TOTAL_STEPS // PNG_EVERY + 1} frames)")
+print(f"\nDone. {write_ptr} steps written to {HDF5_FILE}")
 
-# ─── Final summary timeseries plot ────────────────────────────────────────────
+# ─── Stitch PNGs into video ───────────────────────────────────────────────────
+video_out = "pinball.mp4"
+print(f"\nRendering video -> {video_out} ...")
+result = subprocess.run([
+    "ffmpeg", "-y",
+    "-framerate", str(VIDEO_FPS),
+    "-pattern_type", "glob",
+    "-i", f"{PNG_DIR}/vort_*.png",
+    "-c:v", "libx264",
+    "-pix_fmt", "yuv420p",
+    "-crf", "20",
+    video_out
+], capture_output=True, text=True)
+
+if result.returncode == 0:
+    print(f"Video saved: {video_out}")
+else:
+    print("ffmpeg failed -- PNGs are still in snapshots/")
+    print(result.stderr[-500:])
+
+# ─── Summary timeseries plot ──────────────────────────────────────────────────
 with h5py.File(HDF5_FILE, "r") as f:
-    ts_r = f["timeseries"]
-    time  = ts_r["time"][:]
-    CL2   = ts_r["CL2"][:]
-    CL3   = ts_r["CL3"][:]
-    CD1   = ts_r["CD1"][:]
-    CD2   = ts_r["CD2"][:]
-    CD3   = ts_r["CD3"][:]
-    drag  = ts_r["drag_total"][:]
+    time  = f["timeseries/time"][:]
+    CL2   = f["timeseries/CL2"][:]
+    CL3   = f["timeseries/CL3"][:]
+    CD1   = f["timeseries/CD1"][:]
+    CD2   = f["timeseries/CD2"][:]
+    CD3   = f["timeseries/CD3"][:]
+    drag  = f["timeseries/drag_total"][:]
 
 fig, axes = plt.subplots(3, 1, figsize=(16, 9), sharex=True)
-fig.suptitle(f"Fluidic Pinball Re={Re} — Uncontrolled", fontsize=13)
+fig.suptitle(f"Fluidic Pinball Re={Re} -- Uncontrolled", fontsize=13)
 
-axes[0].plot(time, drag,  color="black", lw=0.7, label="Total drag")
+axes[0].plot(time, drag, color="black", lw=0.7, label="Total drag")
 axes[0].set_ylabel("Total CD"); axes[0].legend(); axes[0].grid(alpha=0.3)
 
 axes[1].plot(time, CD1, lw=0.7, label="CD1 (front)")
