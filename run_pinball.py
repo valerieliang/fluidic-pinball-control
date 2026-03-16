@@ -12,14 +12,14 @@ import subprocess
 # ─── Knobs ────────────────────────────────────────────────────────────────────
 Re            = 100          # higher Re = richer shedding 
 dt            = 1e-2
-TOTAL_STEPS   = 50_000       # t = 500s at dt=0.01
-PNG_EVERY     = 10           # render a vorticity PNG every N steps
-PRINT_EVERY   = 200
+TOTAL_STEPS = 150_000        # t = 500s at dt=0.01
+PNG_EVERY     = 500           # render a vorticity PNG every N steps
+PRINT_EVERY   = 500
 
 HDF5_FILE     = "pinball_timeseries.h5"
 PNG_DIR       = "snapshots"
 
-NOISE_AMP     = 0.002        # small symmetry-breaking perturbation
+NOISE_AMP     = 0.05         # small symmetry-breaking perturbation
 VIDEO_FPS     = 30           # for final ffmpeg video
 # ──────────────────────────────────────────────────────────────────────────────
 
