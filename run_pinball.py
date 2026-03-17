@@ -12,7 +12,7 @@ import subprocess
 # ─── Knobs ────────────────────────────────────────────────────────────────────
 Re            = 100          # higher Re = richer shedding 
 dt            = 1e-2
-TOTAL_STEPS = 80_000          # t=800s is plenty; no need for 1500s
+TOTAL_STEPS   = 80_000
 PNG_EVERY     = 100           # render a vorticity PNG every N steps
 PRINT_EVERY   = 500
 
