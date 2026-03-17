@@ -2,9 +2,9 @@ import cv2
 import glob
 import os
 
-PNG_DIR = "snapshots_5000"
+PNG_DIR = "snapshots"
 VIDEO_OUT = "pinball.mp4"
-VIDEO_FPS = 30
+VIDEO_FPS = 10
 
 images = sorted(glob.glob(os.path.join(PNG_DIR, "vort_*.png")))
 
