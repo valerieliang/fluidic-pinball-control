@@ -1,0 +1,52 @@
+Loading simulation data...
+  t = 0 ... 500 s,  dt = 0.009999999776482582 s,  N = 50,000 steps
+
+Shedding detected after t = 260 s
+  35 peaks  |  median period T = 6.480 s  |  St = 0.1543
+  Analysis window: t = 284.6 - 371.0 s  (12 cycles)
+
+====================================================================
+  Quantity                   Simulated   Table SI4   Error %
+  --------------------------------------------------------------
+  C_D1 (mean)                   0.9042      1.0100     10.5%  ~
+  C_D2 (mean)                   1.2936      1.0100     28.1%  FAIL
+  C_D3 (mean)                   1.2593      1.0100     24.7%  FAIL
+  C_D total (mean)              3.4572      3.0300     14.1%  ~
+  C_L2 amplitude                0.0918      0.1700     46.0%  FAIL
+  C_L3 amplitude                0.0792      0.1700     53.4%  FAIL
+  Strouhal (St)                 0.1543      0.1340     15.2%  ~
+====================================================================
+
+Saved pinball_analysis/stats.json
+
+Plotting Fig 1 - full timeseries...
+  Saved fig1_full_timeseries.png
+Plotting Fig 2 - cycle analysis detail...
+  Saved fig2_cycle_analysis.png
+Plotting Fig 3 - zoomed cycles + amplitude growth...
+  Saved fig3_amplitude_growth.png
+
+========================================================================
+  VALIDATION SUMMARY vs Table SI4  (Re=100, Uncontrolled)
+========================================================================
+  Cycles analysed   : 12  (t = 285 - 371 s)
+  Shedding period T : 6.480 +/- 1.305 s
+  Shedding freq f   : 0.1543 Hz
+  St (peaks)        : 0.1543    |  SI4: 0.1340
+  St (spectral)     : 0.1709
+
+  Quantity                   Simulated     SI4 Ref     Error  Status
+  ----------------------------------------------------------------
+  C_D1 (mean)                   0.9042      1.0100     10.5%  ~OK
+  C_D2 (mean)                   1.2936      1.0100     28.1%  FAIL
+  C_D3 (mean)                   1.2593      1.0100     24.7%  FAIL
+  C_D total (mean)              3.4572      3.0300     14.1%  ~OK
+  C_L2 amplitude                0.0918      0.1700     46.0%  FAIL
+  C_L3 amplitude                0.0792      0.1700     53.4%  FAIL
+  Strouhal (St)                 0.1543      0.1340     15.2%  ~OK
+
+All outputs in: ./pinball_analysis/
+  fig1_full_timeseries.png
+  fig2_cycle_analysis.png
+  fig3_amplitude_growth.png
+  stats.json

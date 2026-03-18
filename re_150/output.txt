@@ -1,8 +1,3 @@
-(venv-firedrake) valval@shrimpfriedrice:~/fluidic-pinball-control$ python run_pinball.py 
-Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
-Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
-Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
-See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
 Applying symmetry-breaking perturbation (amplitude=0.05)...
 Done.
 
@@ -113,4 +108,3 @@ Running Pinball Re=150 for 50000 steps (t=500s)
 
 Done. 50000 steps written to pinball_timeseries.h5
 Saved pinball_summary.png
-(venv-firedrake) valval@shrimpfriedrice:~/fluidic-pinball-control$ 
