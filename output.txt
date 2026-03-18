@@ -1,0 +1,116 @@
+(venv-firedrake) valval@shrimpfriedrice:~/fluidic-pinball-control$ python run_pinball.py 
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+Applying symmetry-breaking perturbation (amplitude=0.05)...
+Done.
+
+Running Pinball Re=150 for 50000 steps (t=500s)
+  PNGs    -> snapshots/ every 100 steps
+  Scalars -> pinball_timeseries.h5
+
+  t=    0.0s | CD1=439.8550 | CL2=-49.67259 | CL2_std(500)=0.0000 | reward=-14.92086
+  t=    5.0s | CD1=1.0062 | CL2=-0.47870 | CL2_std(500)=0.5714 | reward=-0.04205
+  t=   10.0s | CD1=0.9621 | CL2=-0.30660 | CL2_std(500)=0.2806 | reward=-0.03679
+  t=   15.0s | CD1=0.8987 | CL2=0.10630 | CL2_std(500)=0.2391 | reward=-0.03388
+  t=   20.0s | CD1=0.8660 | CL2=0.20699 | CL2_std(500)=0.1474 | reward=-0.03275
+  t=   25.0s | CD1=0.8772 | CL2=0.03211 | CL2_std(500)=0.1145 | reward=-0.03324
+  t=   30.0s | CD1=0.9062 | CL2=-0.09933 | CL2_std(500)=0.1017 | reward=-0.03442
+  t=   35.0s | CD1=0.9018 | CL2=-0.06080 | CL2_std(500)=0.0748 | reward=-0.03377
+  t=   40.0s | CD1=0.8801 | CL2=0.07837 | CL2_std(500)=0.0838 | reward=-0.03284
+  t=   45.0s | CD1=0.8734 | CL2=0.11579 | CL2_std(500)=0.0616 | reward=-0.03285
+  t=   50.0s | CD1=0.8825 | CL2=0.02430 | CL2_std(500)=0.0662 | reward=-0.03335
+  t=   55.0s | CD1=0.8968 | CL2=-0.05863 | CL2_std(500)=0.0620 | reward=-0.03379
+  t=   60.0s | CD1=0.8946 | CL2=-0.02301 | CL2_std(500)=0.0511 | reward=-0.03344
+  t=   65.0s | CD1=0.8800 | CL2=0.07356 | CL2_std(500)=0.0614 | reward=-0.03288
+  t=   70.0s | CD1=0.8749 | CL2=0.09271 | CL2_std(500)=0.0459 | reward=-0.03286
+  t=   75.0s | CD1=0.8845 | CL2=0.01493 | CL2_std(500)=0.0547 | reward=-0.03338
+  t=   80.0s | CD1=0.8957 | CL2=-0.04702 | CL2_std(500)=0.0504 | reward=-0.03370
+  t=   85.0s | CD1=0.8941 | CL2=-0.01128 | CL2_std(500)=0.0449 | reward=-0.03347
+  t=   90.0s | CD1=0.8846 | CL2=0.07139 | CL2_std(500)=0.0547 | reward=-0.03319
+  t=   95.0s | CD1=0.8820 | CL2=0.08490 | CL2_std(500)=0.0409 | reward=-0.03329
+  t=  100.0s | CD1=0.8912 | CL2=0.03010 | CL2_std(500)=0.0483 | reward=-0.03386
+  t=  105.0s | CD1=0.9011 | CL2=-0.02917 | CL2_std(500)=0.0501 | reward=-0.03422
+  t=  110.0s | CD1=0.9061 | CL2=-0.05059 | CL2_std(500)=0.0445 | reward=-0.03428
+  t=  115.0s | CD1=0.8988 | CL2=0.01671 | CL2_std(500)=0.0619 | reward=-0.03392
+  t=  120.0s | CD1=0.8888 | CL2=0.09475 | CL2_std(500)=0.0642 | reward=-0.03353
+  t=  125.0s | CD1=0.8948 | CL2=0.16040 | CL2_std(500)=0.0739 | reward=-0.03415
+  t=  130.0s | CD1=0.8883 | CL2=0.07350 | CL2_std(500)=0.0576 | reward=-0.03352
+  t=  135.0s | CD1=0.8947 | CL2=0.03046 | CL2_std(500)=0.0351 | reward=-0.03408
+  t=  140.0s | CD1=0.9036 | CL2=0.06226 | CL2_std(500)=0.0188 | reward=-0.03445
+  t=  145.0s | CD1=0.9073 | CL2=-0.00364 | CL2_std(500)=0.0462 | reward=-0.03482
+  t=  150.0s | CD1=0.9001 | CL2=0.09214 | CL2_std(500)=0.0371 | reward=-0.03468
+  t=  155.0s | CD1=0.8993 | CL2=0.12011 | CL2_std(500)=0.0368 | reward=-0.03431
+  t=  160.0s | CD1=0.9020 | CL2=-0.00538 | CL2_std(500)=0.0661 | reward=-0.03429
+  t=  165.0s | CD1=0.9063 | CL2=-0.10963 | CL2_std(500)=0.0725 | reward=-0.03439
+  t=  170.0s | CD1=0.9256 | CL2=-0.01026 | CL2_std(500)=0.0931 | reward=-0.03541
+  t=  175.0s | CD1=0.9095 | CL2=0.11432 | CL2_std(500)=0.0964 | reward=-0.03488
+  t=  180.0s | CD1=0.9043 | CL2=0.07036 | CL2_std(500)=0.0518 | reward=-0.03463
+  t=  185.0s | CD1=0.8859 | CL2=0.02537 | CL2_std(500)=0.0393 | reward=-0.03380
+  t=  190.0s | CD1=0.8896 | CL2=0.10803 | CL2_std(500)=0.0336 | reward=-0.03390
+  t=  195.0s | CD1=0.9099 | CL2=-0.03993 | CL2_std(500)=0.0932 | reward=-0.03458
+  t=  200.0s | CD1=0.9252 | CL2=-0.05508 | CL2_std(500)=0.0502 | reward=-0.03573
+  t=  205.0s | CD1=0.9103 | CL2=-0.06682 | CL2_std(500)=0.0626 | reward=-0.03508
+  t=  210.0s | CD1=0.8943 | CL2=0.12061 | CL2_std(500)=0.1177 | reward=-0.03401
+  t=  215.0s | CD1=0.8794 | CL2=0.01226 | CL2_std(500)=0.0715 | reward=-0.03338
+  t=  220.0s | CD1=0.9180 | CL2=-0.10194 | CL2_std(500)=0.0591 | reward=-0.03482
+  t=  225.0s | CD1=0.9076 | CL2=0.10946 | CL2_std(500)=0.0940 | reward=-0.03485
+  t=  230.0s | CD1=0.9049 | CL2=0.10627 | CL2_std(500)=0.0817 | reward=-0.03513
+  t=  235.0s | CD1=0.8938 | CL2=0.04372 | CL2_std(500)=0.0940 | reward=-0.03432
+  t=  240.0s | CD1=0.8849 | CL2=0.10485 | CL2_std(500)=0.0415 | reward=-0.03379
+  t=  245.0s | CD1=0.8825 | CL2=0.10168 | CL2_std(500)=0.0585 | reward=-0.03329
+  t=  250.0s | CD1=0.8964 | CL2=0.03762 | CL2_std(500)=0.0215 | reward=-0.03431
+  t=  255.0s | CD1=0.9154 | CL2=0.03753 | CL2_std(500)=0.0160 | reward=-0.03524
+  t=  260.0s | CD1=0.9133 | CL2=0.01279 | CL2_std(500)=0.0418 | reward=-0.03494
+  t=  265.0s | CD1=0.9047 | CL2=-0.02222 | CL2_std(500)=0.0193 | reward=-0.03477
+  t=  270.0s | CD1=0.8961 | CL2=0.05107 | CL2_std(500)=0.0639 | reward=-0.03402
+  t=  275.0s | CD1=0.8856 | CL2=0.02761 | CL2_std(500)=0.0364 | reward=-0.03360
+  t=  280.0s | CD1=0.8929 | CL2=-0.07396 | CL2_std(500)=0.0416 | reward=-0.03378
+  t=  285.0s | CD1=0.9041 | CL2=0.07394 | CL2_std(500)=0.0591 | reward=-0.03463
+  t=  290.0s | CD1=0.9023 | CL2=0.03266 | CL2_std(500)=0.0469 | reward=-0.03473
+  t=  295.0s | CD1=0.9117 | CL2=-0.08565 | CL2_std(500)=0.0587 | reward=-0.03496
+  t=  300.0s | CD1=0.9124 | CL2=0.01034 | CL2_std(500)=0.0961 | reward=-0.03496
+  t=  305.0s | CD1=0.9040 | CL2=0.04105 | CL2_std(500)=0.0564 | reward=-0.03424
+  t=  310.0s | CD1=0.8965 | CL2=-0.01647 | CL2_std(500)=0.0424 | reward=-0.03395
+  t=  315.0s | CD1=0.9030 | CL2=0.09937 | CL2_std(500)=0.0478 | reward=-0.03466
+  t=  320.0s | CD1=0.9346 | CL2=-0.03583 | CL2_std(500)=0.0596 | reward=-0.03619
+  t=  325.0s | CD1=0.9200 | CL2=-0.01388 | CL2_std(500)=0.0435 | reward=-0.03547
+  t=  330.0s | CD1=0.9076 | CL2=-0.07923 | CL2_std(500)=0.0769 | reward=-0.03450
+  t=  335.0s | CD1=0.8964 | CL2=0.01993 | CL2_std(500)=0.0714 | reward=-0.03375
+  t=  340.0s | CD1=0.8872 | CL2=0.09331 | CL2_std(500)=0.0630 | reward=-0.03347
+  t=  345.0s | CD1=0.9006 | CL2=0.07117 | CL2_std(500)=0.0472 | reward=-0.03457
+  t=  350.0s | CD1=0.8999 | CL2=0.07972 | CL2_std(500)=0.0477 | reward=-0.03466
+  t=  355.0s | CD1=0.8944 | CL2=0.09707 | CL2_std(500)=0.0572 | reward=-0.03412
+  t=  360.0s | CD1=0.9083 | CL2=-0.00501 | CL2_std(500)=0.0821 | reward=-0.03490
+  t=  365.0s | CD1=0.8947 | CL2=0.05049 | CL2_std(500)=0.0253 | reward=-0.03441
+  t=  370.0s | CD1=0.8957 | CL2=0.09030 | CL2_std(500)=0.0382 | reward=-0.03421
+  t=  375.0s | CD1=0.9093 | CL2=-0.06241 | CL2_std(500)=0.0834 | reward=-0.03461
+  t=  380.0s | CD1=0.9014 | CL2=-0.05122 | CL2_std(500)=0.0533 | reward=-0.03444
+  t=  385.0s | CD1=0.8931 | CL2=0.03022 | CL2_std(500)=0.0648 | reward=-0.03398
+  t=  390.0s | CD1=0.8931 | CL2=0.12301 | CL2_std(500)=0.0679 | reward=-0.03403
+  t=  395.0s | CD1=0.9015 | CL2=0.03225 | CL2_std(500)=0.0909 | reward=-0.03458
+  t=  400.0s | CD1=0.9160 | CL2=-0.15335 | CL2_std(500)=0.1238 | reward=-0.03516
+  t=  405.0s | CD1=0.9165 | CL2=0.04161 | CL2_std(500)=0.0992 | reward=-0.03493
+  t=  410.0s | CD1=0.9067 | CL2=0.10328 | CL2_std(500)=0.0503 | reward=-0.03463
+  t=  415.0s | CD1=0.9068 | CL2=-0.07044 | CL2_std(500)=0.0920 | reward=-0.03474
+  t=  420.0s | CD1=0.9042 | CL2=-0.11609 | CL2_std(500)=0.0802 | reward=-0.03464
+  t=  425.0s | CD1=0.9039 | CL2=0.05074 | CL2_std(500)=0.1247 | reward=-0.03456
+  t=  430.0s | CD1=0.8990 | CL2=0.21799 | CL2_std(500)=0.1321 | reward=-0.03445
+  t=  435.0s | CD1=0.8975 | CL2=0.03912 | CL2_std(500)=0.1432 | reward=-0.03425
+  t=  440.0s | CD1=0.9123 | CL2=-0.21305 | CL2_std(500)=0.1635 | reward=-0.03494
+  t=  445.0s | CD1=0.9034 | CL2=-0.10109 | CL2_std(500)=0.1456 | reward=-0.03421
+  t=  450.0s | CD1=0.8990 | CL2=0.12729 | CL2_std(500)=0.1642 | reward=-0.03406
+  t=  455.0s | CD1=0.9001 | CL2=0.12315 | CL2_std(500)=0.1042 | reward=-0.03404
+  t=  460.0s | CD1=0.8897 | CL2=0.07153 | CL2_std(500)=0.0445 | reward=-0.03354
+  t=  465.0s | CD1=0.8784 | CL2=0.15662 | CL2_std(500)=0.0677 | reward=-0.03315
+  t=  470.0s | CD1=0.9050 | CL2=0.01604 | CL2_std(500)=0.0482 | reward=-0.03414
+  t=  475.0s | CD1=0.8943 | CL2=-0.01211 | CL2_std(500)=0.0520 | reward=-0.03405
+  t=  480.0s | CD1=0.9025 | CL2=0.04987 | CL2_std(500)=0.0430 | reward=-0.03482
+  t=  485.0s | CD1=0.8941 | CL2=0.16198 | CL2_std(500)=0.0480 | reward=-0.03411
+  t=  490.0s | CD1=0.8972 | CL2=-0.02553 | CL2_std(500)=0.0981 | reward=-0.03406
+  t=  495.0s | CD1=0.9227 | CL2=-0.11501 | CL2_std(500)=0.0809 | reward=-0.03529
+
+Done. 50000 steps written to pinball_timeseries.h5
+Saved pinball_summary.png
+(venv-firedrake) valval@shrimpfriedrice:~/fluidic-pinball-control$ 
