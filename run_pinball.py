@@ -10,17 +10,18 @@ import os
 import subprocess
 
 # ─── Knobs ────────────────────────────────────────────────────────────────────
-Re            = 150          # higher Re = richer shedding 
-dt            = 1e-2
-TOTAL_STEPS   = 50_000
-PNG_EVERY     = 100           # render a vorticity PNG every N steps
-PRINT_EVERY   = 500
+Re = 100
+dt = 0.01
+TOTAL_STEPS = 50000
 
-HDF5_FILE     = "pinball_timeseries.h5"
-PNG_DIR       = "snapshots"
+PNG_EVERY = 10
+PRINT_EVERY = 200
 
-NOISE_AMP     = 0.05  
-VIDEO_FPS     = 30           # for final ffmpeg video
+HDF5_FILE = "pinball_timeseries.h5"
+PNG_DIR = "snapshots"
+
+NOISE_AMP = 0.002
+VIDEO_FPS = 30
 # ──────────────────────────────────────────────────────────────────────────────
 
 os.makedirs(PNG_DIR, exist_ok=True)
