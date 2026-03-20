@@ -1,15 +1,14 @@
-                HDF5 Baseline Analysis                 
+                 HDF5 Baseline Analysis                
 -------------------------------------------------------
   File             : pinball_timeseries.h5
   Steps analysed   : 49,900  (t > 1 s)
   drag_total mean  : 3.6048
   drag_total std   : 0.1092
-  drag_total range : 3.4923 -- 4.9705
+  drag_total range : 3.4923 - 4.9705
   CD1 / CD2 / CD3  : 0.9697 / 1.3436 / 1.2915
   |CL_sum| mean    : 0.0298
   Reward mean      : -0.03605
-
-  90% reduction target
+  90%% reduction target
     drag_total <=  0.3605
     reward     >=  -0.00360
 -------------------------------------------------------
