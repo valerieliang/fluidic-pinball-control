@@ -2,7 +2,7 @@
 evaluate_drag.py
 ----------------
 Load a trained PPO checkpoint, run N evaluation episodes, and compute
-drag reduction metrics — including comparisons against your HDF5 baseline.
+drag reduction metrics -- including comparisons against your HDF5 baseline.
 
 Usage
   # Against live HydroGym environment
@@ -87,7 +87,7 @@ def compute_drag_reduction(controlled_drag: np.ndarray,
 
     abs_red        = baseline_drag - mean_c            # absolute reduction
     pct_red        = 100.0 * abs_red / baseline_drag   # percentage reduction
-    pct_red_std    = 100.0 * std_c   / baseline_drag   # ± variability
+    pct_red_std    = 100.0 * std_c   / baseline_drag   # +- variability
 
     # Peak (best single-step) drag reduction
     pct_red_peak   = 100.0 * (baseline_drag - min_c) / baseline_drag
@@ -110,36 +110,36 @@ def compute_drag_reduction(controlled_drag: np.ndarray,
 
 def print_drag_report(metrics: dict, baseline: dict, controlled_per_cyl: dict):
     """Pretty-print the full drag reduction report."""
-    bar = "─" * 55
+    bar = "-" * 55
 
     print(f"\n{'Drag Reduction Report':^55}")
     print(bar)
 
     print(f"  Baseline (uncontrolled)")
-    print(f"    drag_total       : {baseline['drag_mean']:.4f}  ±  {baseline['drag_std']:.4f}")
+    print(f"    drag_total       : {baseline['drag_mean']:.4f}  +-  {baseline['drag_std']:.4f}")
     print(f"    CD1 / CD2 / CD3  : {baseline['cd1_mean']:.4f} / "
           f"{baseline['cd2_mean']:.4f} / {baseline['cd3_mean']:.4f}")
     print(f"    |CL_sum|         : {baseline['cl_sum_mean']:.4f}")
     print(f"    reward           : {baseline['reward_mean']:.5f}")
 
     print(f"\n  Controlled (trained PPO)")
-    print(f"    drag_total       : {metrics['controlled_drag']:.4f}  ±  {metrics['drag_std']:.4f}")
+    print(f"    drag_total       : {metrics['controlled_drag']:.4f}  +-  {metrics['drag_std']:.4f}")
     if controlled_per_cyl:
         print(f"    CD1 / CD2 / CD3  : {controlled_per_cyl['cd1']:.4f} / "
               f"{controlled_per_cyl['cd2']:.4f} / {controlled_per_cyl['cd3']:.4f}")
         print(f"    CL2 / CL3        : {controlled_per_cyl.get('cl2', 0):+.4f} / "
-              f"{controlled_per_cyl.get('cl3', 0):+.4f}  (should be ≈ equal & opposite)")
+              f"{controlled_per_cyl.get('cl3', 0):+.4f}  (should be approx equal & opposite)")
         print(f"    f0               : {controlled_per_cyl.get('f0', float('nan')):.4f}  "
-              f"(uncontrolled ≈ 0.088)")
+              f"(uncontrolled approx 0.088)")
 
     print(bar)
-    print(f"  Drag reduction     : {metrics['pct_reduction']:.2f}%  ±  "
+    print(f"  Drag reduction     : {metrics['pct_reduction']:.2f}%  +-  "
           f"{metrics['pct_reduction_std']:.2f}%")
     print(f"  Peak reduction     : {metrics['pct_reduction_peak']:.2f}%")
     print(f"  Absolute reduction : {metrics['absolute_reduction']:.4f} (CD units)")
     print(f"  Reward (controlled): {metrics['reward_mean']:.5f}")
-    status = "✓  TARGET MET" if metrics["target_met"] else "✗  below 90% target"
-    print(f"\n  {status}  (need ≥ 90%, got {metrics['pct_reduction']:.1f}%)")
+    status = "TARGET MET" if metrics["target_met"] else "below 90% target"
+    print(f"\n  {status}  (need >= 90%, got {metrics['pct_reduction']:.1f}%)")
     print(bar)
 
 
@@ -163,7 +163,7 @@ def evaluate_live(checkpoint: str, n_episodes: int,
     all_cl2, all_cl3, all_f0  = [], [], []
     all_red  = []
 
-    print(f"\nEvaluating {n_episodes} episode(s) …")
+    print(f"\nEvaluating {n_episodes} episode(s) ...")
     for ep in range(1, n_episodes + 1):
         info = run_episode(env, agent, collect=False)
         all_drag.append(info["cd"])           # renamed from mean_drag
@@ -206,12 +206,12 @@ def analyse_hdf5(hdf5_path: str):
     baseline = load_baseline(hdf5_path)
 
     print(f"\n{'HDF5 Baseline Analysis':^55}")
-    print("─" * 55)
+    print("-" * 55)
     print(f"  File             : {hdf5_path}")
     print(f"  Steps analysed   : {baseline['n_steps']:,}  (t > 1 s)")
     print(f"  drag_total mean  : {baseline['drag_mean']:.4f}")
     print(f"  drag_total std   : {baseline['drag_std']:.4f}")
-    print(f"  drag_total range : {baseline['drag_min']:.4f} – {baseline['drag_max']:.4f}")
+    print(f"  drag_total range : {baseline['drag_min']:.4f} -- {baseline['drag_max']:.4f}")
     print(f"  CD1 / CD2 / CD3  : {baseline['cd1_mean']:.4f} / "
           f"{baseline['cd2_mean']:.4f} / {baseline['cd3_mean']:.4f}")
     print(f"  |CL_sum| mean    : {baseline['cl_sum_mean']:.4f}")
@@ -220,9 +220,9 @@ def analyse_hdf5(hdf5_path: str):
     print(f"\n  90% reduction target")
     target_drag   = baseline["drag_mean"] * 0.10
     target_reward = -target_drag / 100.0
-    print(f"    drag_total ≤  {target_drag:.4f}")
-    print(f"    reward     ≥  {target_reward:.5f}")
-    print("─" * 55)
+    print(f"    drag_total =<  {target_drag:.4f}")
+    print(f"    reward     >=  {target_reward:.5f}")
+    print("-" * 55)
 
     return baseline
 
@@ -235,13 +235,13 @@ def plot_training_log(csv_path: str = "logs/training_log.csv"):
         import pandas as pd
         import matplotlib.pyplot as plt
     except ImportError:
-        print("pandas/matplotlib not installed — skipping plot")
+        print("pandas/matplotlib not installed -- skipping plot")
         return
 
     df = pd.read_csv(csv_path)
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle("PPO Training — 2-D Fluidic Pinball Re=100", fontsize=14)
+    fig.suptitle("PPO Training - 2-D Fluidic Pinball Re=100", fontsize=14)
 
     # Drag reduction
     axes[0, 0].plot(df["episode"], df["drag_reduction_pct"], color="steelblue")
@@ -282,7 +282,7 @@ def plot_training_log(csv_path: str = "logs/training_log.csv"):
     plt.tight_layout()
     out = "logs/training_curves.png"
     plt.savefig(out, dpi=150)
-    print(f"Training curves saved → {out}")
+    print(f"Training curves saved -> {out}")
     plt.show()
 
 # Entry point
@@ -302,7 +302,7 @@ if __name__ == "__main__":
     parser.add_argument("--device",     type=str, default="cuda",
                         help="torch device: 'cuda' for NVIDIA GPU, 'cpu' as fallback")
     # parse_known_args silently discards PETSc/Firedrake flags that land in
-    # sys.argv — prevents the "unused option" warnings from PETSc.
+    # sys.argv - prevents the "unused option" warnings from PETSc.
     args, _petsc_args = parser.parse_known_args()
 
     # always analyse baseline first
