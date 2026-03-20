@@ -127,6 +127,10 @@ def print_drag_report(metrics: dict, baseline: dict, controlled_per_cyl: dict):
     if controlled_per_cyl:
         print(f"    CD1 / CD2 / CD3  : {controlled_per_cyl['cd1']:.4f} / "
               f"{controlled_per_cyl['cd2']:.4f} / {controlled_per_cyl['cd3']:.4f}")
+        print(f"    CL2 / CL3        : {controlled_per_cyl.get('cl2', 0):+.4f} / "
+              f"{controlled_per_cyl.get('cl3', 0):+.4f}  (should be ≈ equal & opposite)")
+        print(f"    f0               : {controlled_per_cyl.get('f0', float('nan')):.4f}  "
+              f"(uncontrolled ≈ 0.088)")
 
     print(bar)
     print(f"  Drag reduction     : {metrics['pct_reduction']:.2f}%  ±  "
@@ -155,20 +159,23 @@ def evaluate_live(checkpoint: str, n_episodes: int,
     agent.load(checkpoint)
 
     all_drag = []
-    all_cd1  = []
-    all_cd2  = []
-    all_cd3  = []
+    all_cd1, all_cd2, all_cd3 = [], [], []
+    all_cl2, all_cl3, all_f0  = [], [], []
     all_red  = []
 
     print(f"\nEvaluating {n_episodes} episode(s) …")
     for ep in range(1, n_episodes + 1):
         info = run_episode(env, agent, collect=False)
-        all_drag.append(info["mean_drag"])
+        all_drag.append(info["cd"])           # renamed from mean_drag
         all_cd1.append(info["cd1"])
         all_cd2.append(info["cd2"])
         all_cd3.append(info["cd3"])
+        all_cl2.append(info["cl2"])
+        all_cl3.append(info["cl3"])
+        all_f0.append(info["f0"])
         all_red.append(info["drag_reduction_pct"])
-        print(f"  ep {ep:3d}  drag={info['mean_drag']:.4f}  "
+        print(f"  ep {ep:3d}  CD={info['cd']:.4f}  f0={info['f0']:.4f}  "
+              f"CL2={info['cl2']:+.4f}  CL3={info['cl3']:+.4f}  "
               f"reduction={info['drag_reduction_pct']:.1f}%")
 
     env.terminate_run()
@@ -180,6 +187,9 @@ def evaluate_live(checkpoint: str, n_episodes: int,
         "cd1": float(np.mean(all_cd1)),
         "cd2": float(np.mean(all_cd2)),
         "cd3": float(np.mean(all_cd3)),
+        "cl2": float(np.mean(all_cl2)),
+        "cl3": float(np.mean(all_cl3)),
+        "f0":  float(np.nanmean(all_f0)),
     }
 
     print_drag_report(metrics, baseline, controlled_per_cyl)
@@ -275,7 +285,6 @@ def plot_training_log(csv_path: str = "logs/training_log.csv"):
     print(f"Training curves saved → {out}")
     plt.show()
 
-
 # Entry point
 
 if __name__ == "__main__":
@@ -290,8 +299,11 @@ if __name__ == "__main__":
                         help="only analyse the HDF5 file, do not run live evaluation")
     parser.add_argument("--plot",       action="store_true",
                         help="plot training log from logs/training_log.csv")
-    parser.add_argument("--device",     type=str, default="cpu")
-    args = parser.parse_args()
+    parser.add_argument("--device",     type=str, default="cuda",
+                        help="torch device: 'cuda' for NVIDIA GPU, 'cpu' as fallback")
+    # parse_known_args silently discards PETSc/Firedrake flags that land in
+    # sys.argv — prevents the "unused option" warnings from PETSc.
+    args, _petsc_args = parser.parse_known_args()
 
     # always analyse baseline first
     baseline = analyse_hdf5(args.baseline)
