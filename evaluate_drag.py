@@ -15,18 +15,18 @@ Usage
 import sys
 import argparse
 
-# -- Parse our flags NOW, before hydrogym triggers PETSc ----------------------
+# Parse our flags now, before hydrogym triggers PETSc.
 # Strategy: argparse runs first (stdlib only, safe), saves all values into
 # _args. We then rebuild sys.argv with only the leftover (PETSc) flags so
 # that when 'from train_pinball import ...' fires hydrogym -> Firedrake -> PETSc,
 # PETSc finds nothing it doesn't recognise.
 _parser = argparse.ArgumentParser(add_help=False)
-_parser.add_argument("--checkpoint", type=str,  default=None)
-_parser.add_argument("--episodes",   type=int,  default=5)
-_parser.add_argument("--baseline",   type=str,  default="pinball_timeseries.h5")
-_parser.add_argument("--hdf5_only",  action="store_true")
-_parser.add_argument("--plot",       action="store_true")
-_parser.add_argument("--device",     type=str,  default="cuda")
+_parser.add_argument("--checkpoint", type=str, default=None)
+_parser.add_argument("--episodes", type=int, default=5)
+_parser.add_argument("--baseline", type=str, default="pinball_timeseries.h5")
+_parser.add_argument("--hdf5_only", action="store_true")
+_parser.add_argument("--plot", action="store_true")
+_parser.add_argument("--device", type=str, default="cuda")
 _args, _petsc_leftovers = _parser.parse_known_args()
 sys.argv = [sys.argv[0]] + _petsc_leftovers   # hand PETSc only its own flags
 del _parser, _petsc_leftovers
@@ -37,56 +37,56 @@ import torch
 
 from ppo_agent import PPOAgent, PPOConfig
 from train_pinball import (
-    make_env, obs_dim_from_env, act_dim_from_env,
-    run_episode, BASELINE_DRAG, EPISODE_LENGTH, PROBE_LOCATIONS
+    make_env, run_episode, env_reset, env_step, extract_forces,
+    BASELINE_DRAG, EPISODE_LENGTH, OBS_DIM, ACT_DIM,
 )
 
 
-# Load baseline statistics from HDF5
+# 1 - Load baseline statistics from HDF5
 
 def load_baseline(hdf5_path: str) -> dict:
     """
-    Parse the pinball_timeseries.h5 file you already have.
+    Parse the pinball_timeseries.h5 file.
 
-    Returns a dict of scalars that characterise the UNCONTROLLED flow,
+    Returns a dict of scalars that characterise the uncontrolled flow,
     skipping the initialisation spike (t < 1 s).
     """
     with h5py.File(hdf5_path, "r") as f:
-        ts   = f["timeseries"]
-        t    = ts["time"][:]
+        ts = f["timeseries"]
+        t = ts["time"][:]
         mask = t > 1.0                      # skip CFD start-up spike
 
-        cd1      = ts["CD1"][:][mask]
-        cd2      = ts["CD2"][:][mask]
-        cd3      = ts["CD3"][:][mask]
-        cl1      = ts["CL1"][:][mask]
-        cl2      = ts["CL2"][:][mask]
-        cl3      = ts["CL3"][:][mask]
-        drag     = ts["drag_total"][:][mask]
-        reward   = ts["reward"][:][mask]
+        cd1 = ts["CD1"][:][mask]
+        cd2 = ts["CD2"][:][mask]
+        cd3 = ts["CD3"][:][mask]
+        cl1 = ts["CL1"][:][mask]
+        cl2 = ts["CL2"][:][mask]
+        cl3 = ts["CL3"][:][mask]
+        drag = ts["drag_total"][:][mask]
+        reward = ts["reward"][:][mask]
 
-    drag_total  = cd1 + cd2 + cd3          # re-sum to match per-cylinder granularity
-    cl_sum_abs  = np.abs(cl1 + cl2 + cl3)
+    drag_total = cd1 + cd2 + cd3          # re-sum to match per-cylinder granularity
+    cl_sum_abs = np.abs(cl1 + cl2 + cl3)
 
     baseline = {
-        "drag_mean":     float(drag_total.mean()),
-        "drag_std":      float(drag_total.std()),
-        "drag_min":      float(drag_total.min()),
-        "drag_max":      float(drag_total.max()),
-        "cd1_mean":      float(cd1.mean()),
-        "cd2_mean":      float(cd2.mean()),
-        "cd3_mean":      float(cd3.mean()),
-        "cl_sum_mean":   float(cl_sum_abs.mean()),
-        "reward_mean":   float(reward.mean()),
-        "n_steps":       int(mask.sum()),
+        "drag_mean": float(drag_total.mean()),
+        "drag_std": float(drag_total.std()),
+        "drag_min": float(drag_total.min()),
+        "drag_max": float(drag_total.max()),
+        "cd1_mean": float(cd1.mean()),
+        "cd2_mean": float(cd2.mean()),
+        "cd3_mean": float(cd3.mean()),
+        "cl_sum_mean": float(cl_sum_abs.mean()),
+        "reward_mean": float(reward.mean()),
+        "n_steps": int(mask.sum()),
     }
     return baseline
 
 
-# Drag reduction metrics
+# 2 - Drag reduction metrics
 
 def compute_drag_reduction(controlled_drag: np.ndarray,
-                           baseline_drag:   float) -> dict:
+                           baseline_drag: float) -> dict:
     """
     All standard drag reduction metrics used in the HydroGym paper.
 
@@ -99,30 +99,28 @@ def compute_drag_reduction(controlled_drag: np.ndarray,
     -------
     dict of floats, all in consistent units (drag is dimensionless CD)
     """
-    mean_c  = float(controlled_drag.mean())
-    std_c   = float(controlled_drag.std())
-    min_c   = float(controlled_drag.min())
+    mean_c = float(controlled_drag.mean())
+    std_c = float(controlled_drag.std())
+    min_c = float(controlled_drag.min())
 
-    abs_red        = baseline_drag - mean_c            # absolute reduction
-    pct_red        = 100.0 * abs_red / baseline_drag   # percentage reduction
-    pct_red_std    = 100.0 * std_c   / baseline_drag   # +- variability
+    abs_red = baseline_drag - mean_c
+    pct_red = 100.0 * abs_red / baseline_drag
+    pct_red_std = 100.0 * std_c / baseline_drag
 
-    # Peak (best single-step) drag reduction
-    pct_red_peak   = 100.0 * (baseline_drag - min_c) / baseline_drag
+    pct_red_peak = 100.0 * (baseline_drag - min_c) / baseline_drag
 
-    # Reward at convergence  (paper formula, /100 normalisation)
-    reward_mean    = -(mean_c) / 100.0
+    reward_mean = -(mean_c) / 100.0
 
     return {
-        "baseline_drag":      baseline_drag,
-        "controlled_drag":    mean_c,
-        "drag_std":           std_c,
+        "baseline_drag": baseline_drag,
+        "controlled_drag": mean_c,
+        "drag_std": std_c,
         "absolute_reduction": abs_red,
-        "pct_reduction":      pct_red,
-        "pct_reduction_std":  pct_red_std,
+        "pct_reduction": pct_red,
+        "pct_reduction_std": pct_red_std,
         "pct_reduction_peak": pct_red_peak,
-        "reward_mean":        reward_mean,
-        "target_met":         pct_red >= 90.0,
+        "reward_mean": reward_mean,
+        "target_met": pct_red >= 90.0,
     }
 
 
@@ -146,9 +144,9 @@ def print_drag_report(metrics: dict, baseline: dict, controlled_per_cyl: dict):
         print(f"    CD1 / CD2 / CD3  : {controlled_per_cyl['cd1']:.4f} / "
               f"{controlled_per_cyl['cd2']:.4f} / {controlled_per_cyl['cd3']:.4f}")
         print(f"    CL2 / CL3        : {controlled_per_cyl.get('cl2', 0):+.4f} / "
-              f"{controlled_per_cyl.get('cl3', 0):+.4f}  (should be ~ equal & opposite)")
+              f"{controlled_per_cyl.get('cl3', 0):+.4f}  (should be about equal and opposite)")
         print(f"    f0               : {controlled_per_cyl.get('f0', float('nan')):.4f}  "
-              f"(uncontrolled ~ 0.088)")
+              f"(uncontrolled about 0.088)")
 
     print(bar)
     print(f"  Drag reduction     : {metrics['pct_reduction']:.2f}%  +-  "
@@ -156,35 +154,34 @@ def print_drag_report(metrics: dict, baseline: dict, controlled_per_cyl: dict):
     print(f"  Peak reduction     : {metrics['pct_reduction_peak']:.2f}%")
     print(f"  Absolute reduction : {metrics['absolute_reduction']:.4f} (CD units)")
     print(f"  Reward (controlled): {metrics['reward_mean']:.5f}")
-    status = "OK  TARGET MET" if metrics["target_met"] else "X   below 90% target"
+    status = "TARGET MET" if metrics["target_met"] else "below 90% target"
     print(f"\n  {status}  (need >= 90%, got {metrics['pct_reduction']:.1f}%)")
     print(bar)
 
 
-# Live evaluation against HydroGym
+# 3 - Live evaluation against HydroGym
 
 def evaluate_live(checkpoint: str, n_episodes: int,
                   baseline: dict, device: str = "cpu"):
     """Roll out the trained policy and collect drag statistics."""
 
-    # rebuild env just for dims
-    env     = make_env(re=100)
-    obs_dim = obs_dim_from_env(env)
-    act_dim = act_dim_from_env(env)
+    env = make_env(re=100)
+    obs_dim = OBS_DIM
+    act_dim = ACT_DIM
 
-    cfg   = PPOConfig()                    # defaults match training
+    cfg = PPOConfig()
     agent = PPOAgent(obs_dim, act_dim, cfg, device=device)
     agent.load(checkpoint)
 
     all_drag = []
     all_cd1, all_cd2, all_cd3 = [], [], []
-    all_cl2, all_cl3, all_f0  = [], [], []
-    all_red  = []
+    all_cl2, all_cl3, all_f0 = [], [], []
+    all_red = []
 
     print(f"\nEvaluating {n_episodes} episode(s) ...")
     for ep in range(1, n_episodes + 1):
         info = run_episode(env, agent, collect=False)
-        all_drag.append(info["cd"])           # renamed from mean_drag
+        all_drag.append(info["cd"])
         all_cd1.append(info["cd1"])
         all_cd2.append(info["cd2"])
         all_cd3.append(info["cd3"])
@@ -207,14 +204,14 @@ def evaluate_live(checkpoint: str, n_episodes: int,
         "cd3": float(np.mean(all_cd3)),
         "cl2": float(np.mean(all_cl2)),
         "cl3": float(np.mean(all_cl3)),
-        "f0":  float(np.nanmean(all_f0)),
+        "f0": float(np.nanmean(all_f0)),
     }
 
     print_drag_report(metrics, baseline, controlled_per_cyl)
     return metrics
 
 
-# HDF5-only analysis (no environment)
+# 4 - HDF5-only analysis (no environment)
 
 def analyse_hdf5(hdf5_path: str):
     """
@@ -229,14 +226,14 @@ def analyse_hdf5(hdf5_path: str):
     print(f"  Steps analysed   : {baseline['n_steps']:,}  (t > 1 s)")
     print(f"  drag_total mean  : {baseline['drag_mean']:.4f}")
     print(f"  drag_total std   : {baseline['drag_std']:.4f}")
-    print(f"  drag_total range : {baseline['drag_min']:.4f} -- {baseline['drag_max']:.4f}")
+    print(f"  drag_total range : {baseline['drag_min']:.4f} - {baseline['drag_max']:.4f}")
     print(f"  CD1 / CD2 / CD3  : {baseline['cd1_mean']:.4f} / "
           f"{baseline['cd2_mean']:.4f} / {baseline['cd3_mean']:.4f}")
     print(f"  |CL_sum| mean    : {baseline['cl_sum_mean']:.4f}")
     print(f"  Reward mean      : {baseline['reward_mean']:.5f}")
 
     print(f"\n  90% reduction target")
-    target_drag   = baseline["drag_mean"] * 0.10
+    target_drag = baseline["drag_mean"] * 0.10
     target_reward = -target_drag / 100.0
     print(f"    drag_total <=  {target_drag:.4f}")
     print(f"    reward     >=  {target_reward:.5f}")
@@ -245,7 +242,7 @@ def analyse_hdf5(hdf5_path: str):
     return baseline
 
 
-# Optionally plot from training log
+# 5 - Optionally plot from training log
 
 def plot_training_log(csv_path: str = "logs/training_log.csv"):
     """Quick matplotlib plot of drag reduction over training episodes."""
@@ -290,7 +287,7 @@ def plot_training_log(csv_path: str = "logs/training_log.csv"):
 
     # Policy and value losses
     axes[1, 1].plot(df["episode"], df["policy_loss"], label="Policy loss")
-    axes[1, 1].plot(df["episode"], df["value_loss"],  label="Value loss")
+    axes[1, 1].plot(df["episode"], df["value_loss"], label="Value loss")
     axes[1, 1].set_xlabel("Episode")
     axes[1, 1].set_ylabel("Loss")
     axes[1, 1].set_title("PPO Losses")
@@ -307,13 +304,12 @@ def plot_training_log(csv_path: str = "logs/training_log.csv"):
 # Entry point
 
 if __name__ == "__main__":
-    args = _args   # already parsed before hydrogym import
+    args = _args
 
-    # always analyse baseline first
     baseline = analyse_hdf5(args.baseline)
 
     if args.hdf5_only:
-        pass  # done
+        pass
 
     elif args.checkpoint:
         evaluate_live(args.checkpoint, args.episodes, baseline, args.device)
