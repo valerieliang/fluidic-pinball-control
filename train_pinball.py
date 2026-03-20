@@ -7,15 +7,30 @@ Run
   python train_pinball.py [--episodes 500] [--device cpu] [--resume ckpt.pt]
 
 Outputs
-  checkpoints/pinball_ep{N}.pt        — periodic checkpoints
-  logs/training_log.csv               — per-episode metrics
-  checkpoints/pinball_best.pt         — best drag-reduction policy so far
+  checkpoints/pinball_ep{N}.pt            -- periodic checkpoints
+  logs/training_log.csv                   -- per-episode metrics
+  checkpoints/pinball_best.pt             -- best drag-reduction policy so far
 """
+
+import sys
+import argparse
+
+# Parse our flags NOW, before hydrogym triggers PETSc 
+# PETSc scans sys.argv the moment 'import hydrogym' runs. We parse first
+# (stdlib only), save values into _args, then hand PETSc a clean sys.argv.
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument("--episodes",   type=int,  default=500)
+_parser.add_argument("--re",         type=int,  default=100)
+_parser.add_argument("--device",     type=str,  default="cuda")
+_parser.add_argument("--resume",     type=str,  default=None)
+_parser.add_argument("--save_every", type=int,  default=50)
+_args, _petsc_leftovers = _parser.parse_known_args()
+sys.argv = [sys.argv[0]] + _petsc_leftovers
+del _parser, _petsc_leftovers
 
 import os
 import csv
 import time
-import argparse
 import numpy as np
 import hydrogym
 
@@ -28,7 +43,7 @@ BASELINE_DRAG   = 3.60     # mean CD_sum from your pinball_timeseries.h5 baselin
 TARGET_DRAG     = 0.36     # 90 % reduction
 REWARD_SCALE    = 100.0    # HydroGym internally divides reward by this
 EPISODE_LENGTH  = 200      # control actions per episode (≈ 10 shedding periods)
-N_SKIP_DT= 170 * 0.01   # 1.7 s between control actions (Re=100, 2-D)
+N_SKIP_DT       = 170 * 0.01   # 1.7 s between control actions (Re=100, 2-D)
                                 # used for f0 FFT frequency axis
 
 # Probe grid: 6 rows × 8 columns centred on the pinball cluster
@@ -49,16 +64,16 @@ def compute_f0(signal: np.ndarray, dt_control: float) -> float:
     ----------
     signal      : 1-D array of a periodic force (e.g. drag_total per step)
     dt_control  : time in seconds between consecutive control actions
-                  = N_skip x CFD_dt = 170 x 0.01 = 1.7 s  (Re = 100, 2-D)
+                  = N_skip × CFD_dt = 170 × 0.01 = 1.7 s  (Re = 100, 2-D)
 
     Returns
     -------
-    f0 : dominant frequency in dimensionless units  (f x D / U_inf, D=U=1 in HydroGym)
+    f0 : dominant frequency in dimensionless units  (f × D / U∞, D=U=1 in HydroGym)
 
     Paper reference values (Table SI4)
-      Re = 30  -> f0 ~ 0.064
-      Re = 100 -> f0 ~ 0.088
-      Re = 150 -> f0 ~ 0.120
+      Re = 30  -> f0 ≈ 0.064
+      Re = 100 -> f0 ≈ 0.088
+      Re = 150 -> f0 ≈ 0.120
     """
     n    = len(signal)
     if n < 8:
@@ -79,8 +94,8 @@ def make_env(re: int = 100) -> hydrogym.FlowEnv:
     """
     Build a HydroGym FlowEnv for the 2-D fluidic pinball.
 
-    Observation  : (u, v, p) at each probe → shape (144,)
-    Action       : [omega_1, omega_2, omega_3] in [-1, 1]   (surface rotation)
+    Observation  : (u, v, p) at each probe -> shape (144,)
+    Action       : [omega_1, omega_2, omega_3] ∈ [-1, 1]   (surface rotation)
     N_skip       : 170 CFD timesteps / control action       (Re = 100 2-D table)
     """
     cfg = {
@@ -108,10 +123,10 @@ def act_dim_from_env(env) -> int:
 
 class CSVLogger:
     # Columns match the paper's Table SI4 validation metrics:
-    #   f0  : dominant shedding frequency (dimensionless)
-    #   cd  : time-averaged total drag  (CD1 + CD2 + CD3)
-    #   cl2 :: time-averaged lift on rear-upper cylinder
-    #   cl3 : time-averaged lift on rear-lower cylinder
+    #   f0  -- dominant shedding frequency (dimensionless)
+    #   cd  -- time-averaged total drag  (CD1 + CD2 + CD3)
+    #   cl2 -- time-averaged lift on rear-upper cylinder
+    #   cl3 -- time-averaged lift on rear-lower cylinder
     FIELDS = [
         "episode", "elapsed_s",
         "ep_reward", "cd", "drag_reduction_pct",
@@ -141,12 +156,11 @@ def print_row(ep: int, row: dict):
         f"f0 {row['f0']:.4f} | "
         f"CL2 {row['cl2']:+.4f}  CL3 {row['cl3']:+.4f} | "
         f"reduction {row['drag_reduction_pct']:5.1f}% | "
-        f"π_loss {row['policy_loss']:+.4f} | "
+        f"pi_loss {row['policy_loss']:+.4f} | "
         f"H {row['entropy']:.4f}"
     )
 
-
-# Rollout — one full episode
+# Rollout -- one full episode
 
 def run_episode(env, agent: PPOAgent, collect: bool = True) -> dict:
     """
@@ -161,10 +175,10 @@ def run_episode(env, agent: PPOAgent, collect: bool = True) -> dict:
     Returns
     -------
     dict with per-episode scalars matching Table SI4:
-        f0   — dominant shedding frequency (FFT of drag_total signal)
-        cd   — time-averaged total drag (CD1 + CD2 + CD3)
-        cl2  — time-averaged lift on rear-upper cylinder
-        cl3  — time-averaged lift on rear-lower cylinder
+        f0   -- dominant shedding frequency (FFT of drag_total signal)
+        cd   -- time-averaged total drag (CD1 + CD2 + CD3)
+        cl2  -- time-averaged lift on rear-upper cylinder
+        cl3  -- time-averaged lift on rear-lower cylinder
     """
     obs, info = env.reset()
     obs = np.array(obs, dtype=np.float32)
@@ -203,9 +217,9 @@ def run_episode(env, agent: PPOAgent, collect: bool = True) -> dict:
         if done:
             break
 
-    cd = float(np.mean(drag_total_list))
+    cd           = float(np.mean(drag_total_list))
     drag_red_pct = 100.0 * (1.0 - cd / BASELINE_DRAG)
-    f0= compute_f0(np.array(drag_total_list), dt_control=N_SKIP_DT)
+    f0           = compute_f0(np.array(drag_total_list), dt_control=N_SKIP_DT)
 
     return {
         "last_obs":           obs,
@@ -220,14 +234,13 @@ def run_episode(env, agent: PPOAgent, collect: bool = True) -> dict:
         "cl3":                float(np.mean(cl3_list)),
     }
 
-
-# Main training loop
+# Main training loop 
 
 def train(args):
     os.makedirs("checkpoints", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
 
-    print("Building environment …")
+    print("Building environment ...")
     env = make_env(re=args.re)
 
     obs_dim = obs_dim_from_env(env)
@@ -263,10 +276,10 @@ def train(args):
         # collect one episode 
         ep_info = run_episode(env, agent, collect=True)
 
-        # PPO update
+        # PPO update 
         loss_info = agent.update(ep_info["last_obs"])
 
-        # logging
+        # logging 
         row = {
             "episode":            ep,
             "elapsed_s":          round(time.time() - t0, 1),
@@ -276,17 +289,17 @@ def train(args):
         logger.write(row)
         print_row(ep, row)
 
-        # checkpointing
+        # checkpointing 
         if ep % args.save_every == 0:
             agent.save(f"checkpoints/pinball_ep{ep:04d}.pt")
 
         if ep_info["drag_reduction_pct"] > best_red:
             best_red = ep_info["drag_reduction_pct"]
             agent.save("checkpoints/pinball_best.pt")
-            print(f"  ★ new best drag reduction: {best_red:.1f}%")
+            print(f"  * new best drag reduction: {best_red:.1f}%")
 
         if best_red >= 90.0:
-            print(f"\n✓ Target reached (≥ 90% drag reduction) at episode {ep}.")
+            print(f"\n[OK] Target reached (>= 90% drag reduction) at episode {ep}.")
             break
 
     logger.close()
@@ -299,13 +312,4 @@ def train(args):
 # Entry point
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--episodes",   type=int,   default=500)
-    parser.add_argument("--re",         type=int,   default=100)
-    parser.add_argument("--device",     type=str,   default="cpu")
-    parser.add_argument("--resume",     type=str,   default=None,
-                        help="path to a .pt checkpoint to resume from")
-    parser.add_argument("--save_every", type=int,   default=50,
-                        help="save a checkpoint every N episodes")
-    args = parser.parse_args()
-    train(args)
+    train(_args)   # _args already parsed before hydrogym import
