@@ -2,18 +2,18 @@
 ppo_agent.py
 ------------
 Self-contained PPO implementation for HydroGym continuous-action environments.
-No TorchRL / CleanRL dependency — pure PyTorch + numpy.
+No TorchRL / CleanRL dependency -- pure PyTorch + numpy.
 
-Architecture  (paper §4.1)
-  Actor  : MLP with ReLU activations → (mu, log_std) → TanhNormal action distribution
-  Critic : MLP with ReLU activations → scalar value estimate
+Architecture  (paper sec4.1)
+  Actor  : MLP with ReLU activations -> (mu, log_std) -> TanhNormal action distribution
+  Critic : MLP with ReLU activations -> scalar value estimate
 
-Key hyper-parameters for the 2-D fluidic pinball at Re = 100  (paper §4.1)
-  lr           : 5e-5 – 1e-3  (default 3e-4)
-  batch_size   : 16 – 48      (default 32)
+Key hyper-parameters for the 2-D fluidic pinball at Re = 100  (paper sec4.1)
+  lr           : 5e-5 -- 1e-3  (default 3e-4)
+  batch_size   : 16 -- 48      (default 32)
   clip_eps     : 0.2
   gae_lambda   : 0.95
-  episode_len  : 200 actions  (≈ 10 shedding periods at Re = 100)
+  episode_len  : 200 actions  (~ 10 shedding periods at Re = 100)
 """
 
 import numpy as np
@@ -31,7 +31,7 @@ from typing import List, Tuple
 class PPOConfig:
     # network
     hidden_sizes: List[int]  = field(default_factory=lambda: [256, 256])
-    log_std_init: float      = -0.5      # initial log std ≈ 0.6 std
+    log_std_init: float      = -0.5      # initial log std approx 0.6 std
 
     # PPO core
     lr:           float      = 3e-4
@@ -64,7 +64,7 @@ def _mlp(in_dim: int, hidden: List[int], out_dim: int, act=nn.ReLU) -> nn.Sequen
 class Actor(nn.Module):
     """
     Outputs a (mu, std) Gaussian over actions, then squashes with tanh so that
-    sampled actions live in (-1, 1) — matching HydroGym's normalised action space.
+    sampled actions live in (-1, 1) -- matching HydroGym's normalised action space.
     """
 
     def __init__(self, obs_dim: int, act_dim: int, cfg: PPOConfig):
@@ -181,9 +181,16 @@ class RolloutBuffer:
 
 class PPOAgent:
     def __init__(self, obs_dim: int, act_dim: int, cfg: PPOConfig,
-                 device: str = "cpu"):
+                 device: str = "cuda"):
         self.cfg    = cfg
+        # fall back to CPU silently if the requested device is unavailable
+        if device == "cuda" and not torch.cuda.is_available():
+            print("  [PPOAgent] CUDA requested but not available -- using CPU")
+            device = "cpu"
         self.device = torch.device(device)
+        print(f"  [PPOAgent] device: {self.device}"
+              + (f"  ({torch.cuda.get_device_name(0)})"
+                 if self.device.type == "cuda" else ""))
 
         self.actor  = Actor(obs_dim, act_dim, cfg).to(self.device)
         self.critic = Critic(obs_dim, cfg).to(self.device)
@@ -298,7 +305,7 @@ class PPOAgent:
             "optim":   self.optim.state_dict(),
             "episode": self._episode,
         }, path)
-        print(f"  [ckpt] saved → {path}")
+        print(f"  [ckpt] saved -> {path}")
 
     def load(self, path: str):
         ckpt = torch.load(path, map_location=self.device)
@@ -306,4 +313,4 @@ class PPOAgent:
         self.critic.load_state_dict(ckpt["critic"])
         self.optim.load_state_dict(ckpt["optim"])
         self._episode = ckpt.get("episode", 0)
-        print(f"  [ckpt] loaded ← {path} (episode {self._episode})")
+        print(f"  [ckpt] loaded <- {path} (episode {self._episode})")
