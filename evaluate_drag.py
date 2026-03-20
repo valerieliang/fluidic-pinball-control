@@ -12,7 +12,25 @@ Usage
   python evaluate_drag.py --hdf5_only --baseline pinball_timeseries.h5
 """
 
+import sys
 import argparse
+
+# -- Parse our flags NOW, before hydrogym triggers PETSc ----------------------
+# Strategy: argparse runs first (stdlib only, safe), saves all values into
+# _args. We then rebuild sys.argv with only the leftover (PETSc) flags so
+# that when 'from train_pinball import ...' fires hydrogym -> Firedrake -> PETSc,
+# PETSc finds nothing it doesn't recognise.
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument("--checkpoint", type=str,  default=None)
+_parser.add_argument("--episodes",   type=int,  default=5)
+_parser.add_argument("--baseline",   type=str,  default="pinball_timeseries.h5")
+_parser.add_argument("--hdf5_only",  action="store_true")
+_parser.add_argument("--plot",       action="store_true")
+_parser.add_argument("--device",     type=str,  default="cuda")
+_args, _petsc_leftovers = _parser.parse_known_args()
+sys.argv = [sys.argv[0]] + _petsc_leftovers   # hand PETSc only its own flags
+del _parser, _petsc_leftovers
+
 import numpy as np
 import h5py
 import torch
@@ -128,9 +146,9 @@ def print_drag_report(metrics: dict, baseline: dict, controlled_per_cyl: dict):
         print(f"    CD1 / CD2 / CD3  : {controlled_per_cyl['cd1']:.4f} / "
               f"{controlled_per_cyl['cd2']:.4f} / {controlled_per_cyl['cd3']:.4f}")
         print(f"    CL2 / CL3        : {controlled_per_cyl.get('cl2', 0):+.4f} / "
-              f"{controlled_per_cyl.get('cl3', 0):+.4f}  (should be approx equal & opposite)")
+              f"{controlled_per_cyl.get('cl3', 0):+.4f}  (should be ~ equal & opposite)")
         print(f"    f0               : {controlled_per_cyl.get('f0', float('nan')):.4f}  "
-              f"(uncontrolled approx 0.088)")
+              f"(uncontrolled ~ 0.088)")
 
     print(bar)
     print(f"  Drag reduction     : {metrics['pct_reduction']:.2f}%  +-  "
@@ -138,7 +156,7 @@ def print_drag_report(metrics: dict, baseline: dict, controlled_per_cyl: dict):
     print(f"  Peak reduction     : {metrics['pct_reduction_peak']:.2f}%")
     print(f"  Absolute reduction : {metrics['absolute_reduction']:.4f} (CD units)")
     print(f"  Reward (controlled): {metrics['reward_mean']:.5f}")
-    status = "TARGET MET" if metrics["target_met"] else "below 90% target"
+    status = "OK  TARGET MET" if metrics["target_met"] else "X   below 90% target"
     print(f"\n  {status}  (need >= 90%, got {metrics['pct_reduction']:.1f}%)")
     print(bar)
 
@@ -220,14 +238,14 @@ def analyse_hdf5(hdf5_path: str):
     print(f"\n  90% reduction target")
     target_drag   = baseline["drag_mean"] * 0.10
     target_reward = -target_drag / 100.0
-    print(f"    drag_total =<  {target_drag:.4f}")
+    print(f"    drag_total <=  {target_drag:.4f}")
     print(f"    reward     >=  {target_reward:.5f}")
     print("-" * 55)
 
     return baseline
 
 
-# Plot from training log
+# Optionally plot from training log
 
 def plot_training_log(csv_path: str = "logs/training_log.csv"):
     """Quick matplotlib plot of drag reduction over training episodes."""
@@ -241,7 +259,7 @@ def plot_training_log(csv_path: str = "logs/training_log.csv"):
     df = pd.read_csv(csv_path)
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle("PPO Training - 2-D Fluidic Pinball Re=100", fontsize=14)
+    fig.suptitle("PPO Training -- 2-D Fluidic Pinball Re=100", fontsize=14)
 
     # Drag reduction
     axes[0, 0].plot(df["episode"], df["drag_reduction_pct"], color="steelblue")
@@ -285,25 +303,11 @@ def plot_training_log(csv_path: str = "logs/training_log.csv"):
     print(f"Training curves saved -> {out}")
     plt.show()
 
+
 # Entry point
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", type=str, default=None,
-                        help="path to trained .pt checkpoint for live evaluation")
-    parser.add_argument("--episodes",   type=int, default=5,
-                        help="number of eval episodes (live mode)")
-    parser.add_argument("--baseline",   type=str, default="pinball_timeseries.h5",
-                        help="path to HDF5 baseline file")
-    parser.add_argument("--hdf5_only",  action="store_true",
-                        help="only analyse the HDF5 file, do not run live evaluation")
-    parser.add_argument("--plot",       action="store_true",
-                        help="plot training log from logs/training_log.csv")
-    parser.add_argument("--device",     type=str, default="cuda",
-                        help="torch device: 'cuda' for NVIDIA GPU, 'cpu' as fallback")
-    # parse_known_args silently discards PETSc/Firedrake flags that land in
-    # sys.argv - prevents the "unused option" warnings from PETSc.
-    args, _petsc_args = parser.parse_known_args()
+    args = _args   # already parsed before hydrogym import
 
     # always analyse baseline first
     baseline = analyse_hdf5(args.baseline)
