@@ -85,17 +85,31 @@ def make_env(re=100):
     return hgym.FlowEnv(env_config)
 
 
+# Number of warmup steps before training starts.
+# At Re=100, vortex shedding develops around t~30-50 s simulated time.
+# N_SKIP=10, dt=0.01 -> each warmup step = 0.10 s simulated.
+# 500 warmup steps = 50 s simulated = ~4 shedding periods.
+# This matches what the simulation script does (runs ~500 s before recording).
+WARMUP_STEPS = 500
+
+
 def get_initial_obs(env):
     """
-    Get the first observation. Tries reset() first; if that fails or hangs,
-    steps once with zero action (matching the simulation script behaviour).
+    Step the flow through WARMUP_STEPS control actions with zero actuation
+    so that vortex shedding is fully developed before training starts.
+    The simulation script does the same thing (runs uncontrolled for a long
+    time before any recording or control).
     """
-    try:
-        result = env.reset()
-        obs = result[0] if isinstance(result, tuple) else result
-    except Exception:
+    print("  Warming up flow for %d steps (%.0f s simulated) ..." % (
+          WARMUP_STEPS, WARMUP_STEPS * DT_CONTROL))
+    obs = None
+    for i in range(WARMUP_STEPS):
         result = env.step([0.0, 0.0, 0.0])
         obs = result[0]
+        if (i + 1) % 100 == 0:
+            cd_sum = float(obs[3]) + float(obs[4]) + float(obs[5])
+            print("    warmup step %4d / %d   CD_sum = %.4f" % (
+                  i + 1, WARMUP_STEPS, cd_sum))
     return np.array(obs, dtype=np.float32)
 
 
