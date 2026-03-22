@@ -70,8 +70,19 @@ if is_rank0():
 BASELINE_DRAG  = 3.60
 TARGET_DRAG    = 0.36
 
-OBS_DIM = 6   # [CL1, CL2, CL3, CD1, CD2, CD3]
 ACT_DIM = 3   # [omega_1, omega_2, omega_3]
+
+# Observation = raw env obs + last N actions appended
+# Raw obs: [CL1, CL2, CL3, CD1, CD2, CD3] = 6 values
+# Action history: N x 3 values
+# Total OBS_DIM = 6 + ACTION_HISTORY_LEN * 3
+ACTION_HISTORY_LEN = 5
+OBS_DIM = 6 + ACTION_HISTORY_LEN * ACT_DIM   # = 21
+
+# Asymmetry penalty weight in reward.
+# Penalizing (CL2 + CL3)^2 steers agent toward symmetric strategies
+# like counter-rotation and away from the asymmetric deflection local optimum.
+ASYM_PENALTY = 0.3
 
 # N_SKIP=10 for Firedrake FEM (paper used N_SKIP=170 for GPU LBM solver)
 # dt=0.01 s, so each control action = 0.10 s simulated
@@ -137,6 +148,11 @@ def get_initial_obs(env):
             print("    warmup step %4d / %d   CD_sum = %.4f" % (
                   i + 1, WARMUP_STEPS, cd_sum))
     return np.array(obs, dtype=np.float32)
+
+
+def build_obs(raw_obs, action_history):
+    history_flat = np.array(action_history, dtype=np.float32).flatten()
+    return np.concatenate([raw_obs, history_flat])
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +228,11 @@ def run_episode(env, agent, obs, collect=True):
 
     Returns a dict on rank 0, None on other ranks.
     """
+    # Zero action history at episode start
+    zero_action = [0.0] * ACT_DIM
+    action_history = [zero_action[:] for _ in range(ACTION_HISTORY_LEN)]
+    obs = build_obs(obs, action_history)
+
     if is_rank0():
         ep_reward = 0.0
         cd1_list, cd2_list, cd3_list = [], [], []
@@ -219,7 +240,6 @@ def run_episode(env, agent, obs, collect=True):
         drag_list = []
 
     for _ in range(EPISODE_LENGTH):
-        # Rank 0 selects action, all ranks receive it
         if is_rank0():
             action, log_prob, value = agent.select_action(obs)
             action_list = action.tolist()
@@ -231,10 +251,18 @@ def run_episode(env, agent, obs, collect=True):
 
         action_list = bcast(action_list)
 
-        obs_next, reward, done = env_step(env, action_list)
+        raw_obs_next, env_reward, done = env_step(env, action_list)
+
+        action_history = action_history[1:] + [action_list]
+        obs_next = build_obs(raw_obs_next, action_history)
 
         if is_rank0():
-            cd1, cd2, cd3, cl1, cl2, cl3 = extract_forces(obs_next)
+            cd1, cd2, cd3, cl1, cl2, cl3 = extract_forces(raw_obs_next)
+
+            # Shaped reward: env reward minus asymmetry penalty
+            # (cl2 + cl3) near zero means symmetric wake
+            asym = cl2 + cl3
+            reward = env_reward - ASYM_PENALTY * (asym ** 2)
 
             if collect:
                 agent.store(obs, action, log_prob, reward, value, done)
