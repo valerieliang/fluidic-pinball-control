@@ -2,27 +2,25 @@
 train_pinball.py
 ----------------
 PPO training on the HydroGym 2-D fluidic pinball (Re = 100).
-Uses the Firedrake backend.
+Uses the Firedrake backend with MPI parallelism.
 
-Key decisions:
-  - env.reset() is called ONCE at startup only. The Firedrake FlowEnv
-    re-solves a steady-state problem inside reset() which is very slow.
-    Between episodes we continue from the last observation.
-  - n_steps_per_actuation is set in the env config so Firedrake advances
-    N_SKIP CFD steps per env.step() call internally.
+MPI design:
+  - ALL ranks run the Firedrake solver (mesh is decomposed across ranks)
+  - Only rank 0 has the PyTorch agent, buffer, and logger
+  - Rank 0 selects an action and broadcasts it to all other ranks
+  - All ranks call env.step() with that action
+  - Only rank 0 stores transitions, does PPO updates, logs, and checkpoints
+  - best_red is broadcast so all ranks can check the stop condition
 
 Run:
-  python train_pinball.py
-  python train_pinball.py --episodes 500 --device cuda
-  python train_pinball.py --resume checkpoints/pinball_best.pt
+  python train_pinball.py                         # single process
+  mpiexec -n 8 python train_pinball.py            # 8 MPI ranks (use nproc)
+  mpiexec -n 8 python train_pinball.py --episodes 500
 """
 
 import sys
 import argparse
 
-# Parse our flags before hydrogym import triggers PETSc.
-# PETSc scans sys.argv at import time and warns about unrecognised flags.
-# We parse first, save values in _args, then hand PETSc a clean sys.argv.
 _parser = argparse.ArgumentParser(add_help=False)
 _parser.add_argument("--episodes",   type=int, default=500)
 _parser.add_argument("--re",         type=int, default=100)
@@ -39,35 +37,53 @@ import time
 import numpy as np
 
 import hydrogym.firedrake as hgym
-from ppo_agent import PPOAgent, PPOConfig
+
+# MPI setup -- must happen after hydrogym import (which initialises MPI)
+try:
+    from mpi4py import MPI
+    _COMM     = MPI.COMM_WORLD
+    _MPI_RANK = _COMM.Get_rank()
+    _MPI_SIZE = _COMM.Get_size()
+except ImportError:
+    _COMM     = None
+    _MPI_RANK = 0
+    _MPI_SIZE = 1
+
+def is_rank0():
+    return _MPI_RANK == 0
+
+def bcast(value):
+    """Broadcast value from rank 0 to all other ranks."""
+    if _COMM is not None:
+        return _COMM.bcast(value, root=0)
+    return value
+
+# Only rank 0 imports PyTorch and creates the agent
+if is_rank0():
+    from ppo_agent import PPOAgent, PPOConfig
 
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-BASELINE_DRAG  = 3.60   # mean CD_sum from pinball_timeseries.h5
-TARGET_DRAG    = 0.36   # 90% reduction target
+BASELINE_DRAG  = 3.60
+TARGET_DRAG    = 0.36
 
-# obs layout from Firedrake FlowEnv: [CL1, CL2, CL3, CD1, CD2, CD3]
-OBS_DIM = 6
+OBS_DIM = 6   # [CL1, CL2, CL3, CD1, CD2, CD3]
 ACT_DIM = 3   # [omega_1, omega_2, omega_3]
 
-# 170 CFD steps per control action at Re=100 (paper Table SI)
-# dt=0.01 s per CFD step, so 1 control action = 1.7 s simulated time
-# N_SKIP=10 chosen for Firedrake (CPU FEM solver).
-# The paper used N_SKIP=170 for the m-AIA GPU lattice-Boltzmann solver.
-# Firedrake is much slower per timestep, so we use fewer substeps per action
-# and more actions per episode to still cover ~10 shedding periods.
-#
-# Shedding period at Re=100: St~0.088 -> period = 1/0.088 ~= 11.4 s
-# N_SKIP=10, dt=0.01 -> dt_control=0.10 s -> 114 steps/period
-# EPISODE_LENGTH=1200 -> ~10.5 shedding periods per episode
-# Total FEM solves per episode: 10 x 1200 = 12,000  (vs 170 x 200 = 34,000)
+# N_SKIP=10 for Firedrake FEM (paper used N_SKIP=170 for GPU LBM solver)
+# dt=0.01 s, so each control action = 0.10 s simulated
+# EPISODE_LENGTH=600: 60 s simulated = ~5 shedding periods at Re=100
 N_SKIP         = 10
 DT_CFD         = 0.01
-DT_CONTROL     = N_SKIP * DT_CFD   # 0.10 s, used for f0 FFT
-EPISODE_LENGTH = 1200               # control actions per episode
+DT_CONTROL     = N_SKIP * DT_CFD
+EPISODE_LENGTH = 600
+
+# Warmup: run uncontrolled until vortex shedding is fully developed
+# 500 steps x 0.10 s = 50 s simulated (~4 shedding periods)
+WARMUP_STEPS   = 500
 
 
 # ---------------------------------------------------------------------------
@@ -85,39 +101,8 @@ def make_env(re=100):
     return hgym.FlowEnv(env_config)
 
 
-# Number of warmup steps before training starts.
-# At Re=100, vortex shedding develops around t~30-50 s simulated time.
-# N_SKIP=10, dt=0.01 -> each warmup step = 0.10 s simulated.
-# 500 warmup steps = 50 s simulated = ~4 shedding periods.
-# This matches what the simulation script does (runs ~500 s before recording).
-WARMUP_STEPS = 500
-
-
-def get_initial_obs(env):
-    """
-    Step the flow through WARMUP_STEPS control actions with zero actuation
-    so that vortex shedding is fully developed before training starts.
-    The simulation script does the same thing (runs uncontrolled for a long
-    time before any recording or control).
-    """
-    print("  Warming up flow for %d steps (%.0f s simulated) ..." % (
-          WARMUP_STEPS, WARMUP_STEPS * DT_CONTROL))
-    obs = None
-    for i in range(WARMUP_STEPS):
-        result = env.step([0.0, 0.0, 0.0])
-        obs = result[0]
-        if (i + 1) % 100 == 0:
-            cd_sum = float(obs[3]) + float(obs[4]) + float(obs[5])
-            print("    warmup step %4d / %d   CD_sum = %.4f" % (
-                  i + 1, WARMUP_STEPS, cd_sum))
-    return np.array(obs, dtype=np.float32)
-
-
 def env_step(env, action):
-    """
-    Single step advancing N_SKIP CFD substeps.
-    Handles both old Gym 4-return and Gymnasium 5-return APIs.
-    """
+    """Step env, handle both 4-return (old Gym) and 5-return (Gymnasium) APIs."""
     result = env.step(action)
     if len(result) == 5:
         obs, reward, terminated, truncated, _ = result
@@ -134,6 +119,26 @@ def extract_forces(obs):
     return cd1, cd2, cd3, cl1, cl2, cl3
 
 
+def get_initial_obs(env):
+    """
+    Warm up the flow with WARMUP_STEPS zero-action steps so vortex shedding
+    is fully developed before training starts. All ranks run the solver;
+    only rank 0 prints progress.
+    """
+    if is_rank0():
+        print("  Warming up for %d steps (%.0f s simulated) ..." % (
+              WARMUP_STEPS, WARMUP_STEPS * DT_CONTROL))
+    obs = None
+    for i in range(WARMUP_STEPS):
+        result = env.step([0.0, 0.0, 0.0])
+        obs = result[0]
+        if is_rank0() and (i + 1) % 100 == 0:
+            cd_sum = float(obs[3]) + float(obs[4]) + float(obs[5])
+            print("    warmup step %4d / %d   CD_sum = %.4f" % (
+                  i + 1, WARMUP_STEPS, cd_sum))
+    return np.array(obs, dtype=np.float32)
+
+
 # ---------------------------------------------------------------------------
 # f0 from FFT
 # ---------------------------------------------------------------------------
@@ -148,7 +153,7 @@ def compute_f0(signal, dt_control):
 
 
 # ---------------------------------------------------------------------------
-# Logging
+# Logging (rank 0 only)
 # ---------------------------------------------------------------------------
 
 class CSVLogger:
@@ -197,55 +202,73 @@ def print_row(ep, row):
 
 def run_episode(env, agent, obs, collect=True):
     """
-    Roll out one episode of EPISODE_LENGTH control actions starting from obs.
+    Roll out one episode.
 
-    obs is passed in rather than obtained from reset() so we never call
-    reset() between episodes. The flow state continues from the previous
-    episode end point.
+    MPI behaviour:
+      - Rank 0 selects the action from the policy and broadcasts it
+      - All ranks call env.step() with that action (Firedrake parallelism)
+      - Only rank 0 stores transitions in the buffer
+      - Only rank 0 accumulates stats (other ranks return None)
 
-    Returns a dict including "last_obs" for the next episode.
+    Returns a dict on rank 0, None on other ranks.
     """
-    ep_reward = 0.0
-    cd1_list, cd2_list, cd3_list = [], [], []
-    cl2_list, cl3_list = [], []
-    drag_list = []
+    if is_rank0():
+        ep_reward = 0.0
+        cd1_list, cd2_list, cd3_list = [], [], []
+        cl2_list, cl3_list = [], []
+        drag_list = []
 
     for _ in range(EPISODE_LENGTH):
-        action, log_prob, value = agent.select_action(obs)
-        obs_next, reward, done  = env_step(env, action.tolist())
+        # Rank 0 selects action, all ranks receive it
+        if is_rank0():
+            action, log_prob, value = agent.select_action(obs)
+            action_list = action.tolist()
+        else:
+            action_list = None
+            log_prob    = None
+            value       = None
+            action      = None
 
-        cd1, cd2, cd3, cl1, cl2, cl3 = extract_forces(obs_next)
+        action_list = bcast(action_list)
 
-        if collect:
-            agent.store(obs, action, log_prob, reward, value, done)
+        obs_next, reward, done = env_step(env, action_list)
 
-        ep_reward += reward
-        cd1_list.append(cd1)
-        cd2_list.append(cd2)
-        cd3_list.append(cd3)
-        cl2_list.append(cl2)
-        cl3_list.append(cl3)
-        drag_list.append(cd1 + cd2 + cd3)
+        if is_rank0():
+            cd1, cd2, cd3, cl1, cl2, cl3 = extract_forces(obs_next)
+
+            if collect:
+                agent.store(obs, action, log_prob, reward, value, done)
+
+            ep_reward += reward
+            cd1_list.append(cd1)
+            cd2_list.append(cd2)
+            cd3_list.append(cd3)
+            cl2_list.append(cl2)
+            cl3_list.append(cl3)
+            drag_list.append(cd1 + cd2 + cd3)
 
         obs = obs_next
+
         if done:
             break
 
-    cd           = float(np.mean(drag_list))
-    drag_red_pct = 100.0 * (1.0 - cd / BASELINE_DRAG)
-
-    return {
-        "last_obs":           obs,
-        "ep_reward":          ep_reward,
-        "cd":                 cd,
-        "drag_reduction_pct": drag_red_pct,
-        "f0":                 compute_f0(np.array(drag_list), DT_CONTROL),
-        "cd1":                float(np.mean(cd1_list)),
-        "cd2":                float(np.mean(cd2_list)),
-        "cd3":                float(np.mean(cd3_list)),
-        "cl2":                float(np.mean(cl2_list)),
-        "cl3":                float(np.mean(cl3_list)),
-    }
+    if is_rank0():
+        cd           = float(np.mean(drag_list))
+        drag_red_pct = 100.0 * (1.0 - cd / BASELINE_DRAG)
+        return {
+            "last_obs":           obs,
+            "ep_reward":          ep_reward,
+            "cd":                 cd,
+            "drag_reduction_pct": drag_red_pct,
+            "f0":                 compute_f0(np.array(drag_list), DT_CONTROL),
+            "cd1":                float(np.mean(cd1_list)),
+            "cd2":                float(np.mean(cd2_list)),
+            "cd3":                float(np.mean(cd3_list)),
+            "cl2":                float(np.mean(cl2_list)),
+            "cl3":                float(np.mean(cl3_list)),
+        }
+    else:
+        return {"last_obs": obs}
 
 
 # ---------------------------------------------------------------------------
@@ -253,76 +276,90 @@ def run_episode(env, agent, obs, collect=True):
 # ---------------------------------------------------------------------------
 
 def train(args):
-    os.makedirs("checkpoints", exist_ok=True)
-    os.makedirs("logs", exist_ok=True)
+    if is_rank0():
+        os.makedirs("checkpoints", exist_ok=True)
+        os.makedirs("logs", exist_ok=True)
 
-    print("Building environment ...")
+    if is_rank0():
+        print("Building environment ...")
     env = make_env(re=args.re)
-    print("  obs_dim = %d   act_dim = %d" % (OBS_DIM, ACT_DIM))
-    print("  N_SKIP = %d   DT_control = %.2f s" % (N_SKIP, DT_CONTROL))
+    if is_rank0():
+        print("  obs_dim = %d   act_dim = %d" % (OBS_DIM, ACT_DIM))
+        print("  N_SKIP = %d   DT_control = %.2f s" % (N_SKIP, DT_CONTROL))
+        print("  MPI ranks = %d" % _MPI_SIZE)
 
-    cfg = PPOConfig(
-        hidden_sizes   = [256, 256],
-        log_std_init   = -0.5,
-        lr             = 3e-4,
-        clip_eps       = 0.2,
-        gamma          = 0.99,
-        gae_lambda     = 0.95,
-        n_epochs       = 10,
-        batch_size     = 32,
-        value_coef     = 0.5,
-        entropy_coef   = 0.01,
-        max_grad_norm  = 0.5,
-        lr_anneal      = True,
-        total_episodes = args.episodes,
-    )
+    if is_rank0():
+        cfg = PPOConfig(
+            hidden_sizes   = [256, 256],
+            log_std_init   = 0.0,
+            lr             = 3e-4,
+            clip_eps       = 0.2,
+            gamma          = 0.99,
+            gae_lambda     = 0.95,
+            n_epochs       = 10,
+            batch_size     = 32,
+            value_coef     = 0.5,
+            entropy_coef   = 0.05,
+            max_grad_norm  = 0.5,
+            lr_anneal      = True,
+            total_episodes = args.episodes,
+        )
+        agent = PPOAgent(OBS_DIM, ACT_DIM, cfg, device=args.device)
+        if args.resume:
+            agent.load(args.resume)
+        logger   = CSVLogger("logs/training_log.csv")
+        t0       = time.time()
+        best_red = -float("inf")
+    else:
+        agent = None
 
-    agent = PPOAgent(OBS_DIM, ACT_DIM, cfg, device=args.device)
-    if args.resume:
-        agent.load(args.resume)
-
-    print("Initialising flow (one-time setup) ...")
-    t_init = time.time()
-    obs    = get_initial_obs(env)
-    print("  Ready in %.1fs. Initial obs: %s" % (time.time() - t_init, obs))
-
-    logger   = CSVLogger("logs/training_log.csv")
-    t0       = time.time()
-    best_red = -float("inf")
+    if is_rank0():
+        print("Initialising flow (one-time setup) ...")
+        t_init = time.time()
+    obs = get_initial_obs(env)
+    if is_rank0():
+        print("  Ready in %.1fs. Initial obs: %s" % (time.time() - t_init, obs))
 
     for ep in range(1, args.episodes + 1):
 
-        ep_info   = run_episode(env, agent, obs, collect=True)
-        obs       = ep_info["last_obs"]
-        loss_info = agent.update(ep_info["last_obs"])
+        ep_info = run_episode(env, agent, obs, collect=True)
+        obs     = ep_info["last_obs"]
 
-        row = {"episode": ep, "elapsed_s": round(time.time() - t0, 1)}
-        row.update(ep_info)
-        row.update(loss_info)
+        if is_rank0():
+            loss_info = agent.update(ep_info["last_obs"])
 
-        logger.write(row)
-        print_row(ep, row)
+            row = {"episode": ep, "elapsed_s": round(time.time() - t0, 1)}
+            row.update(ep_info)
+            row.update(loss_info)
 
-        if ep % args.save_every == 0:
-            agent.save("checkpoints/pinball_ep%04d.pt" % ep)
+            logger.write(row)
+            print_row(ep, row)
 
-        if ep_info["drag_reduction_pct"] > best_red:
-            best_red = ep_info["drag_reduction_pct"]
-            agent.save("checkpoints/pinball_best.pt")
-            print("  new best: %.1f%%" % best_red)
+            if ep % args.save_every == 0:
+                agent.save("checkpoints/pinball_ep%04d.pt" % ep)
+
+            if ep_info["drag_reduction_pct"] > best_red:
+                best_red = ep_info["drag_reduction_pct"]
+                agent.save("checkpoints/pinball_best.pt")
+                print("  new best: %.1f%%" % best_red)
+
+        # Broadcast best_red so all ranks can check the stop condition
+        best_red = bcast(best_red if is_rank0() else None)
 
         if best_red >= 90.0:
-            print("90%% drag reduction reached at episode %d." % ep)
+            if is_rank0():
+                print("90%% drag reduction reached at episode %d." % ep)
             break
 
-    logger.close()
+    if is_rank0():
+        logger.close()
+        print("Done. Best reduction: %.2f%%" % best_red)
+        print("Best checkpoint: checkpoints/pinball_best.pt")
+
     try:
         env.close()
     except AttributeError:
         pass
-
-    print("Done. Best reduction: %.2f%%" % best_red)
-    print("Best checkpoint: checkpoints/pinball_best.pt")
 
 
 if __name__ == "__main__":
