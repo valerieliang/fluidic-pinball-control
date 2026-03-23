@@ -236,11 +236,16 @@ def run_episode(env, agent, obs, baseline_drag):
 
         # COLLECTIVE: advance CFD.
         obs_next, reward, done = env_step(env, action_buf.tolist())
+        # --- compute drag-based reward ---
+        cd1, cd2, cd3, cl1, cl2, cl3 = extract_forces(obs_next)
+        drag = cd1 + cd2 + cd3
+
+        # normalized reward
+        reward = (baseline_drag - drag) / baseline_drag
 
         # Rank 0: record transition.
         if RANK == 0:
             agent.store(obs, action_np, log_prob, reward, value, done)
-            cd1, cd2, cd3, cl1, cl2, cl3 = extract_forces(obs_next)
             ep_reward += reward
             cd1_list.append(cd1);  cd2_list.append(cd2);  cd3_list.append(cd3)
             cl2_list.append(cl2);  cl3_list.append(cl3)
@@ -298,14 +303,14 @@ def train(args):
         cfg = PPOConfig(
             hidden_sizes   = [256, 256],
             log_std_init   = -0.5,
-            lr             = 3e-4,
+            lr             = 1e-4,
             clip_eps       = 0.2,
             gamma          = 0.99,
             gae_lambda     = 0.95,
             n_epochs       = 10,
             batch_size     = 32,
             value_coef     = 0.5,
-            entropy_coef   = 0.05,
+            entropy_coef   = 0.01,
             max_grad_norm  = 0.5,
             lr_anneal      = True,
             total_episodes = args.episodes,

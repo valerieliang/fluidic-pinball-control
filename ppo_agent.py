@@ -83,7 +83,7 @@ class RunningNorm(nn.Module):
     @torch.no_grad()
     def update(self, obs: np.ndarray):
         """Update running stats with a single observation (1-D numpy array)."""
-        x     = torch.FloatTensor(obs)
+        x     = torch.FloatTensor(obs).to(self.mean.device)
         self.count += 1
         delta      = x - self.mean
         self.mean  = self.mean + delta / self.count.float()
@@ -169,7 +169,7 @@ class Actor(nn.Module):
         #                 = log p_Normal(raw) - log(1 - tanh(raw)²)
         log_prob = (dist.log_prob(raw)
                     - torch.log(1 - action.pow(2) + 1e-6)).sum(-1)
-        entropy  = dist.entropy().sum(-1)
+        entropy = dist.entropy().sum(-1)
         return action, log_prob, entropy
 
     def evaluate(self, obs: torch.Tensor, action: torch.Tensor):
@@ -180,7 +180,7 @@ class Actor(nn.Module):
         raw     = torch.atanh(action.clamp(-1 + 1e-6, 1 - 1e-6))
         log_prob = (dist.log_prob(raw)
                     - torch.log(1 - action.pow(2) + 1e-6)).sum(-1)
-        entropy  = dist.entropy().sum(-1)
+        entropy = dist.entropy().sum(-1)
         return log_prob, entropy
 
 
@@ -314,8 +314,7 @@ class PPOAgent:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _normalise(self, obs_t: torch.Tensor) -> torch.Tensor:
-        """Apply running normalisation if enabled."""
+    def _normalise(self, obs_t):
         if self.obs_norm is not None:
             return self.obs_norm(obs_t)
         return obs_t
@@ -327,7 +326,7 @@ class PPOAgent:
     @torch.no_grad()
     def select_action(self, obs: np.ndarray) -> Tuple[np.ndarray, float, float]:
         # Update running stats with raw observation before normalising.
-        if self.obs_norm is not None:
+        if self.obs_norm is not None and self._episode < 5:
             self.obs_norm.update(obs)
 
         obs_t  = torch.FloatTensor(obs).unsqueeze(0).to(self.device)
@@ -390,6 +389,11 @@ class PPOAgent:
                 idx = indices[start: start + self.cfg.batch_size]
 
                 new_lp, entropy = self.actor.evaluate(norm_obs[idx], acts[idx])
+
+                approx_kl = (old_lps[idx] - new_lp).mean().item()
+                if approx_kl > 0.02:
+                    continue
+
                 new_v           = self.critic(norm_obs[idx])
 
                 ratio       = (new_lp - old_lps[idx]).exp()
