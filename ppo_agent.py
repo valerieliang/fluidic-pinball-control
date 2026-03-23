@@ -305,6 +305,7 @@ class PPOAgent:
         self.critic   = Critic(obs_dim, cfg).to(self.device)
         self.optim    = torch.optim.Adam(
             list(self.actor.parameters()) + list(self.critic.parameters()),
+         
             lr=cfg.lr, eps=1e-5,
         )
         self.buffer   = RolloutBuffer()
