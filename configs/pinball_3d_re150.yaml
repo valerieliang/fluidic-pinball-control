@@ -1,0 +1,59 @@
+# configs/pinball_3d_re150.yaml
+# 3D fluidic pinball, Re=150 -- primary stress test
+# CFD-RL action interval: 200 substeps (paper Table SI 4)
+# Strouhal number: St ≈ 0.113 -> shedding period ≈ 8.8 convective time units
+# At dt=1e-2 and 200 substeps/action -> Δt=2.0 per action -> ~4-5 actions/cycle
+# buffer_len=50 covers ~10 shedding cycles to capture spanwise modulation
+#
+# WARNING: 3D case is significantly more expensive. Run on HPC only.
+# Spanwise instabilities couple front/rear actuators more strongly than 2D --
+# the hierarchical decomposition may need validation here (see proposal §4).
+# Run with at least 5 seeds and compare variance against flat PPO baseline.
+
+run_name: pinball_3d_re150
+
+# --- Environment ---
+Re: 150
+mesh: medium
+refinement_level: 12
+dt: 1.0e-2
+num_substeps: 200
+n_probes: 6
+buffer_len: 50
+embed_dim: 16
+warmup_steps: 300         # longer warmup -- 3D flow takes more time to develop
+
+# --- Reward ---
+# Uncontrolled baseline: C_D_bar ≈ 2.949, St ≈ 0.113
+reward_omega: 1.0
+
+# --- Manager ---
+manager_hidden: 128       # larger hidden dim for richer 3D dynamics
+goal_dim: 8
+
+# --- Sub-policies ---
+subpolicy_hidden: 128
+symm_timescale_ratio: 3
+
+# --- PPO ---
+total_timesteps: 1000000  # 3D is harder; budget more steps
+n_steps: 2048
+n_epochs: 10
+batch_size: 64
+gamma: 0.99
+gae_lambda: 0.95
+clip_eps: 0.2
+vf_coef: 0.5
+ent_coef: 0.02            # higher entropy -- 3D chaotic flow needs more exploration
+max_grad_norm: 0.5
+lr: 1.0e-4                # lower lr for stability in 3D regime
+
+# --- Auxiliary loss ---
+aux_freq_weight: 0.15     # slightly upweighted -- spanwise modulation makes
+                          # frequency prediction a harder and more useful signal
+strouhal_ref: 0.113
+
+# --- Logging / checkpointing ---
+log_interval: 1
+save_interval: 5          # checkpoint more frequently -- 3D runs are expensive
+save_dir: checkpoints

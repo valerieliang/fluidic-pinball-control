@@ -1,0 +1,58 @@
+# configs/pinball_re100.yaml
+# 2D fluidic pinball, Re=100
+# CFD-RL action interval: 170 substeps (paper Table SI 4)
+# Strouhal number: St ≈ 0.088 -> shedding period ≈ 11.4 convective time units
+# At dt=1e-2 and 170 substeps/action -> Δt=1.7 per action -> ~7 actions/cycle
+# buffer_len=35 covers ~5 shedding cycles (sufficient for regime embedding)
+
+run_name: pinball_re100_2d
+
+# --- Environment ---
+Re: 100
+mesh: medium
+refinement_level: 12
+dt: 1.0e-2
+num_substeps: 170         # fast timescale; passed to PinballEnv as-is
+                          # symmetry controller slowdown handled in ppo_joint.py
+n_probes: 6
+buffer_len: 35
+embed_dim: 16
+warmup_steps: 200
+
+# --- Reward ---
+# r = -|sum(C_D,i)| - omega * |sum(C_L,i)|
+# Uncontrolled baseline: C_D_bar ≈ 2.904, St ≈ 0.088
+reward_omega: 1.0
+
+# --- Manager ---
+manager_hidden: 64
+goal_dim: 8
+
+# --- Sub-policies ---
+subpolicy_hidden: 64
+# Symmetry controller operates at 3x slower timescale than stabilization
+# i.e., goal_symm is updated every 3 stabilization steps
+symm_timescale_ratio: 3
+
+# --- PPO ---
+total_timesteps: 500000
+n_steps: 2048
+n_epochs: 10
+batch_size: 64
+gamma: 0.99
+gae_lambda: 0.95
+clip_eps: 0.2
+vf_coef: 0.5
+ent_coef: 0.01
+max_grad_norm: 0.5
+lr: 3.0e-4
+
+# --- Auxiliary loss ---
+aux_freq_weight: 0.1
+# Ground truth dominant frequency for validation (not used as supervision)
+strouhal_ref: 0.088
+
+# --- Logging / checkpointing ---
+log_interval: 1
+save_interval: 10
+save_dir: checkpoints
