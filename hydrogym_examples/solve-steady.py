@@ -40,9 +40,9 @@ os.makedirs(frames_dir, exist_ok=True)
 # Parameters
 # -------------------------
 mesh_resolution = "medium"
-Re_target = 100
+Re_target = 80
 
-# Smooth continuation (THIS is the important part)
+# Smooth continuation 
 n_frames = 80
 Re_values = np.linspace(40, Re_target, n_frames)
 
