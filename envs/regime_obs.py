@@ -6,7 +6,7 @@ import torch.nn as nn
 class RegimeObsBuffer:
     """
     Rolling buffer of probe observations + learned spectral embedding.
-    Buffer shape: (T, n_probes) — time axis first for 1D conv.
+    Buffer shape: (T, n_probes) -- time axis first for 1D conv.
     """
     def __init__(self, n_probes=6, buffer_len=50, embed_dim=16):
         self.n_probes = n_probes
