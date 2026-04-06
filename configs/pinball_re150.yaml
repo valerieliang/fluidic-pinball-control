@@ -1,11 +1,11 @@
 # configs/pinball_re150.yaml
 # 2D fluidic pinball, Re=150
 # CFD-RL action interval: 100 substeps (paper Table SI 4)
-# Strouhal number: St ≈ 0.120 -> shedding period ≈ 8.3 convective time units
-# At dt=1e-2 and 100 substeps/action -> Δt=1.0 per action -> ~8 actions/cycle
+# Strouhal number: St ~ 0.120 -> shedding period ~ 8.3 convective time units
+# At dt=1e-2 and 100 substeps/action -> dt=1.0 per action -> ~8 actions/cycle
 # buffer_len=40 covers ~5 shedding cycles
-# Note: Re=150 is above the Neimark-Sacker bifurcation (Re≈104) and near
-# chaotic onset (Re≈130) -- expect higher training variance than Re=100.
+# Note: Re=150 is above the Neimark-Sacker bifurcation (Re~104) and near
+# chaotic onset (Re~130) -- expect higher training variance than Re=100.
 
 run_name: pinball_re150_2d
 
@@ -21,7 +21,7 @@ embed_dim: 16
 warmup_steps: 200
 
 # --- Reward ---
-# Uncontrolled baseline: C_D_bar ≈ 2.922, St ≈ 0.120
+# Uncontrolled baseline: C_D_bar ~ 2.922, St ~ 0.120
 reward_omega: 1.0
 
 # --- Manager ---

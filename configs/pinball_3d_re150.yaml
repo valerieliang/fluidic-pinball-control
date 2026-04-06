@@ -1,13 +1,13 @@
 # configs/pinball_3d_re150.yaml
 # 3D fluidic pinball, Re=150 -- primary stress test
 # CFD-RL action interval: 200 substeps (paper Table SI 4)
-# Strouhal number: St ≈ 0.113 -> shedding period ≈ 8.8 convective time units
-# At dt=1e-2 and 200 substeps/action -> Δt=2.0 per action -> ~4-5 actions/cycle
+# Strouhal number: St ~ 0.113 -> shedding period ~ 8.8 convective time units
+# At dt=1e-2 and 200 substeps/action -> dt=2.0 per action -> ~4-5 actions/cycle
 # buffer_len=50 covers ~10 shedding cycles to capture spanwise modulation
 #
 # WARNING: 3D case is significantly more expensive. Run on HPC only.
 # Spanwise instabilities couple front/rear actuators more strongly than 2D --
-# the hierarchical decomposition may need validation here (see proposal §4).
+# the hierarchical decomposition may need validation here (see proposal sec 4).
 # Run with at least 5 seeds and compare variance against flat PPO baseline.
 
 run_name: pinball_3d_re150
@@ -24,7 +24,7 @@ embed_dim: 16
 warmup_steps: 300         # longer warmup -- 3D flow takes more time to develop
 
 # --- Reward ---
-# Uncontrolled baseline: C_D_bar ≈ 2.949, St ≈ 0.113
+# Uncontrolled baseline: C_D_bar ~ 2.949, St ~ 0.113
 reward_omega: 1.0
 
 # --- Manager ---

@@ -1,8 +1,8 @@
 # configs/pinball_re100.yaml
 # 2D fluidic pinball, Re=100
 # CFD-RL action interval: 170 substeps (paper Table SI 4)
-# Strouhal number: St ≈ 0.088 -> shedding period ≈ 11.4 convective time units
-# At dt=1e-2 and 170 substeps/action -> Δt=1.7 per action -> ~7 actions/cycle
+# Strouhal number: St ~ 0.088 -> shedding period ~ 11.4 convective time units
+# At dt=1e-2 and 170 substeps/action -> dt=1.7 per action -> ~7 actions/cycle
 # buffer_len=35 covers ~5 shedding cycles (sufficient for regime embedding)
 
 run_name: pinball_re100_2d
@@ -21,7 +21,7 @@ warmup_steps: 200
 
 # --- Reward ---
 # r = -|sum(C_D,i)| - omega * |sum(C_L,i)|
-# Uncontrolled baseline: C_D_bar ≈ 2.904, St ≈ 0.088
+# Uncontrolled baseline: C_D_bar ~ 2.904, St ~ 0.088
 reward_omega: 1.0
 
 # --- Manager ---
