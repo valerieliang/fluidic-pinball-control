@@ -1,9 +1,0 @@
-Re = 100
-dt = 0.01
-TOTAL_STEPS = 50000
-PNG_EVERY = 10
-PRINT_EVERY = 200
-HDF5_FILE = "pinball_timeseries.h5"
-PNG_DIR = "snapshots"
-NOISE_AMP = 0.002
-VIDEO_FPS = 30

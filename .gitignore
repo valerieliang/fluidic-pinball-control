@@ -2,3 +2,4 @@ checkpoints
 snapshots*
 __pycache__
 output*/
+old
