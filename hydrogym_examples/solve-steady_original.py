@@ -19,68 +19,103 @@ Note: Pinball flow exhibits rich dynamics even at moderate Reynolds numbers.
 """
 
 import os
+import numpy as np
 
 import firedrake as fd
-
 import hydrogym.firedrake as hgym
 
-output_dir = "output"
-if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
+# -------------------------
+# Output directory
+# -------------------------
+output_dir = "output_original"
+os.makedirs(output_dir, exist_ok=True)
 
+# -------------------------
+# Parameters
+# -------------------------
 mesh_resolution = "medium"
-Re = 80  # Use Re < 100 for better steady convergence
+Re = 80
 
 solver_parameters = {"snes_monitor": None}
 
-# Reynolds ramping for better convergence
-# Start from lower Re and gradually increase to target value
+# Reynolds ramping
 Re_init = [40, 60, Re]
 
-# Create flow configuration with Taylor-Hood elements (P2-P1)
+# -------------------------
+# Flow setup
+# -------------------------
 flow = hgym.Pinball(
     Re=Re_init[0],
     mesh=mesh_resolution,
-    velocity_order=2,  # P2 velocity, P1 pressure (Taylor-Hood)
-    use_HF_data_manager=False,  # Disable high-fidelity data manager
+    velocity_order=2,
+    use_HF_data_manager=False,
 )
 
 dof = flow.mixed_space.dim()
 hgym.print(f"Total dof: {dof} --- dof/rank: {int(dof / fd.COMM_WORLD.size)}")
 
-# Set up Newton solver for nonlinear steady-state problem
+# -------------------------
+# Solver
+# -------------------------
 solver = hgym.NewtonSolver(
     flow,
-    stabilization="none",  # Taylor-Hood (P2-P1) is inf-sup stable
+    stabilization="none",
     solver_parameters=solver_parameters,
 )
 
-# Reynolds ramping for convergence
+# -------------------------
+# Reynolds ramping solve
+# -------------------------
 for i, Re_val in enumerate(Re_init):
     flow.Re.assign(Re_val)
-    hgym.print(f"Steady solve at Re={Re_init[i]}")
-    qB = solver.solve()
+    hgym.print(f"Steady solve at Re={Re_val}")
+    solver.solve()
 
-# Save steady state checkpoint for restart or post-processing
-flow.save_checkpoint(f"{output_dir}/pinball_Re{Re}_steady.h5")
+# -------------------------
+# Save solution (NumPy instead of HDF5)
+# -------------------------
+npz_path = f"{output_dir}/pinball_Re{Re}_steady.npz"
 
-# Compute and save force coefficients for each cylinder
-# Returns arrays with [CL1, CL2, CL3] and [CD1, CD2, CD3]
+with flow.q.dat.vec_ro as vec:
+    q_array = vec.getArray().copy()
+
+np.savez(npz_path, q=q_array)
+
+hgym.print(f"Checkpoint saved (NumPy) -> {npz_path}")
+
+# -------------------------
+# Save fields (u, p)
+# -------------------------
+u_array = flow.u.dat.data_ro.copy()
+p_array = flow.p.dat.data_ro.copy()
+
+fields_path = f"{output_dir}/pinball_Re{Re}_fields.npz"
+np.savez(fields_path, u=u_array, p=p_array)
+
+hgym.print(f"Field data saved -> {fields_path}")
+
+# -------------------------
+# Compute forces
+# -------------------------
 CL, CD = flow.compute_forces()
+
 hgym.print("Steady state forces:")
 hgym.print(f"  Cylinder 1: CL={CL[0]:.6f}, CD={CD[0]:.6f}")
 hgym.print(f"  Cylinder 2: CL={CL[1]:.6f}, CD={CD[1]:.6f}")
 hgym.print(f"  Cylinder 3: CL={CL[2]:.6f}, CD={CD[2]:.6f}")
 
-# Save visualization
+# -------------------------
+# Save visualization (ParaView)
+# -------------------------
 vort = flow.vorticity()
+
+vtk_path = f"{output_dir}/pinball_Re{Re}_steady.pvd"
+
 try:
-    # Try newer Firedrake API
-    pvd = fd.VTKFile(f"{output_dir}/pinball_Re{Re}_steady.pvd")
+    pvd = fd.VTKFile(vtk_path)
     pvd.write(flow.u, flow.p, vort)
 except AttributeError:
-    # Fall back to older API
-    pvd = fd.File(f"{output_dir}/pinball_Re{Re}_steady.pvd")
+    pvd = fd.File(vtk_path)
     pvd.write(flow.u, flow.p, vort)
 
-hgym.print(f"Steady state saved to {output_dir}/pinball_Re{Re}_steady.h5")
+hgym.print(f"Visualization saved -> {vtk_path}")
