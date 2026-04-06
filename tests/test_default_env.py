@@ -1,4 +1,3 @@
-# scripts/train_local.py (stub)
 import hydrogym.firedrake as hgym
 from hydrogym import FlowEnv
 import numpy as np
