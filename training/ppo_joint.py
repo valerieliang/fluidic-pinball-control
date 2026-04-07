@@ -231,7 +231,7 @@ def estimate_dominant_freq(probe_history: np.ndarray, dt: float) -> float:
 class HRSSATrainer:
     def __init__(self, cfg: PPOConfig):
         self.cfg = cfg
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cpu")
         print(f"Device: {self.device}")
 
         # --- Environment ---
@@ -260,9 +260,6 @@ class HRSSATrainer:
             goal_dim=cfg.goal_dim,
             hidden=cfg.subpolicy_hidden,
         ).to(self.device)
-
-        # Move encoder to device and include in optimizer (orphaned-encoder fix)
-        self.env._buf.encoder = self.env._buf.encoder.to(self.device)
 
         self.optimizer = optim.Adam(
             list(self.manager.parameters())

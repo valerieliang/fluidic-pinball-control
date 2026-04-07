@@ -13,6 +13,9 @@ Usage (from repo root, inside venv-firedrake):
 import sys
 import os
 
+# Disable CUDA visibility
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 # Ensure repo root is on sys.path regardless of where script is called from
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:

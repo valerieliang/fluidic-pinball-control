@@ -81,7 +81,7 @@ class PinballEnv(gym.Env):
 
     def _make_obs(self, raw_obs: np.ndarray) -> np.ndarray:
         self._buf.push(raw_obs)
-        embed = self._buf.embed().numpy()
+        embed = self._buf.embed().detach().cpu().numpy()
         return np.concatenate([raw_obs, embed])
 
     def _fit_normalizer(self):

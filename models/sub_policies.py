@@ -28,6 +28,9 @@ class SubPolicy(nn.Module):
         )
 
     def forward(self, obs, goal):
+        device = next(self.parameters()).device
+        obs = obs.to(device)
+        goal = goal.to(device)
         x = torch.cat([obs, goal], dim=-1)
         h = self.actor(x)
         mean = self.action_mean(h)
@@ -35,6 +38,10 @@ class SubPolicy(nn.Module):
         return Normal(mean, std), self.critic(x)
 
     def get_action(self, obs, goal):
+        device = next(self.parameters()).device
+        obs = obs.to(device)
+        goal = goal.to(device)
+
         dist, value = self.forward(obs, goal)
         action = dist.sample()
         log_prob = dist.log_prob(action).sum(-1)

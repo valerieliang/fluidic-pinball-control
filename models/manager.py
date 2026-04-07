@@ -41,6 +41,9 @@ class Manager(nn.Module):
         h_next        : (batch, hidden)
         predicted_freq: (batch, 1)
         """
+        device = next(self.parameters()).device
+        embed = embed.to(device)
+        h = h.to(device)
         h_next         = self.gru(embed, h)
         goal_stab      = self._head_goal_stab(h_next)
         goal_symm      = self._head_goal_symm(h_next)
@@ -59,4 +62,5 @@ class Manager(nn.Module):
         return self._head_goal_stab(h), self._head_goal_symm(h)
 
     def init_hidden(self, batch_size: int = 1) -> torch.Tensor:
-        return torch.zeros(batch_size, self.hidden)
+        device = next(self.parameters()).device
+        return torch.zeros(batch_size, self.hidden, device=device)

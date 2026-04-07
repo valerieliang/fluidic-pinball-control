@@ -17,6 +17,8 @@ class RegimeObsBuffer:
         self.obs_mean = np.zeros(n_probes, dtype=np.float32)
         self.obs_std  = np.ones(n_probes,  dtype=np.float32)
 
+        self.device = torch.device("cpu")  # Force CPU
+
         # 1D conv: input (batch, n_probes, T), output (batch, embed_dim)
         self.encoder = nn.Sequential(
             nn.Conv1d(n_probes, 32, kernel_size=7, padding=3),
@@ -24,7 +26,7 @@ class RegimeObsBuffer:
             nn.Conv1d(32, embed_dim, kernel_size=5, padding=2),
             nn.AdaptiveAvgPool1d(1),   # collapse time dim
             nn.Flatten(),
-        )
+        ).to(self.device)
 
         self._buf = np.zeros((buffer_len, n_probes), dtype=np.float32)
         self._ptr = 0
@@ -44,13 +46,17 @@ class RegimeObsBuffer:
     def embed(self) -> torch.Tensor:
         """Returns (embed_dim,) regime embedding, or zeros if buffer not full."""
         if not self._full:
-            return torch.zeros(self.embed_dim)
-        # Arrange as circular buffer in time order
+            return torch.zeros(self.embed_dim, device=self.device)
+
         idx = self._ptr % self.buffer_len
         ordered = np.concatenate([self._buf[idx:], self._buf[:idx]], axis=0)
-        x = torch.from_numpy(ordered).T.unsqueeze(0)  # (1, n_probes, T)
+
+        x = torch.from_numpy(ordered).float().to(self.device)  # 🔥 force CPU
+        x = x.T.unsqueeze(0)  # (1, n_probes, T)
+
         with torch.no_grad():
-            return self.encoder(x).squeeze(0)          # (embed_dim,)
+            self.encoder.to(self.device)
+            return self.encoder(x).squeeze(0)       # (embed_dim,)
 
     def reset(self):
         self._buf[:] = 0.0
