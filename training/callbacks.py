@@ -21,11 +21,28 @@ obs_mean        : np.ndarray
 obs_std         : np.ndarray
 env             : PinballEnv
 save_dir        : Path
+
+Optional trajectory keys (populated when a rollout buffer is attached)
+-----------------------------------------------------------------------
+obs_buffer      : np.ndarray  shape (n_steps, n_probes, n_features)
+action_buffer   : np.ndarray  shape (n_steps, n_actuators)
+reward_buffer   : np.ndarray  shape (n_steps,)
+drag_buffer     : np.ndarray  shape (n_steps,)
+lift_buffer     : np.ndarray  shape (n_steps,)
+
+Optional HDF5 metadata keys (all written as HDF5 root attributes when present)
+-------------------------------------------------------------------------------
+Re              : float  -- Reynolds number
+geometry        : str
+actuation       : str
+algorithm       : str    -- defaults to "PPO"
+convergence_episode : int
 """
 
 from __future__ import annotations
 
 import csv
+import io
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -110,35 +127,148 @@ class CSVLoggerCallback(Callback):
 
 class CheckpointCallback(Callback):
     """
-    Saves a full checkpoint every `save_interval` episodes and always
-    on training end. Keeps only the last `keep_last` checkpoints to
-    avoid filling disk on HPC runs.
+    Saves a full checkpoint every `save_interval` episodes and always on
+    training end. Checkpoints are written as HDF5 (.h5) files and contain:
+
+    Datasets
+    --------
+    /weights/manager        -- raw bytes of manager.state_dict() (torch format)
+    /weights/sub_policies   -- raw bytes of sub_policies.state_dict()
+    /weights/encoder        -- raw bytes of encoder.state_dict()
+    /weights/optimizer      -- raw bytes of optimizer.state_dict()
+    /norm/obs_mean          -- observation normalisation mean  (float32)
+    /norm/obs_std           -- observation normalisation std   (float32)
+
+    Trajectory datasets (written only when the corresponding buffer is
+    present in `state`; shapes follow the HydroGym/paper convention)
+    --------
+    /trajectory/observations  -- (n_steps, n_probes, n_features)
+    /trajectory/actions       -- (n_steps, n_actuators)
+    /trajectory/rewards       -- (n_steps,)
+    /trajectory/drags         -- (n_steps,)
+    /trajectory/lifts         -- (n_steps,)
+
+    Root attributes
+    ---------------
+    episode, global_step, ep_reward, mean_reward_100, total_loss
+    Re, geometry, actuation, algorithm, convergence_episode
+    (the last five are written only when present in `state`)
+
+    Keeps only the last `keep_last` checkpoints to avoid filling disk on
+    HPC runs.  The "final" checkpoint is never pruned.
     """
+
     def __init__(self, save_interval: int = 10, keep_last: int = 5):
         self.save_interval = save_interval
         self.keep_last     = keep_last
         self._saved: List[Path] = []
 
-    def _save(self, state: Dict[str, Any], tag: str):
-        path = state["save_dir"] / f"checkpoint_{tag}.pt"
-        torch.save({
-            "episode":      state["episode"],
-            "global_step":  state["global_step"],
-            "manager":      state["manager"].state_dict(),
-            "sub_policies": state["sub_policies"].state_dict(),
-            "encoder":      state["encoder"].state_dict(),
-            "optimizer":    state["optimizer"].state_dict(),
-            "obs_mean":     state["obs_mean"],
-            "obs_std":      state["obs_std"],
-        }, path)
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _state_dict_to_bytes(module_or_optim) -> np.ndarray:
+        """Serialise a PyTorch state-dict to a 1-D uint8 numpy array."""
+        buf = io.BytesIO()
+        torch.save(module_or_optim.state_dict(), buf)
+        return np.frombuffer(buf.getvalue(), dtype=np.uint8)
+
+    def _save(self, state: Dict[str, Any], tag: str) -> None:
+        try:
+            import h5py
+        except ImportError as exc:
+            raise ImportError(
+                "h5py is required for HDF5 checkpointing. "
+                "Install it with: pip install h5py"
+            ) from exc
+
+        path = state["save_dir"] / f"checkpoint_{tag}.h5"
+
+        with h5py.File(path, "w") as f:
+
+            # ---- model weights (serialised PyTorch state dicts) ----------
+            wg = f.create_group("weights")
+            wg.create_dataset(
+                "manager",
+                data=self._state_dict_to_bytes(state["manager"]),
+            )
+            wg.create_dataset(
+                "sub_policies",
+                data=self._state_dict_to_bytes(state["sub_policies"]),
+            )
+            wg.create_dataset(
+                "encoder",
+                data=self._state_dict_to_bytes(state["encoder"]),
+            )
+            wg.create_dataset(
+                "optimizer",
+                data=self._state_dict_to_bytes(state["optimizer"]),
+            )
+
+            # ---- observation normalisation stats -------------------------
+            ng = f.create_group("norm")
+            ng.create_dataset(
+                "obs_mean",
+                data=np.asarray(state["obs_mean"], dtype=np.float32),
+            )
+            ng.create_dataset(
+                "obs_std",
+                data=np.asarray(state["obs_std"], dtype=np.float32),
+            )
+
+            # ---- trajectory buffers (optional) ---------------------------
+            traj_keys = {
+                "obs_buffer":    "observations",
+                "action_buffer": "actions",
+                "reward_buffer": "rewards",
+                "drag_buffer":   "drags",
+                "lift_buffer":   "lifts",
+            }
+            traj_data = {
+                h5_name: state[state_key]
+                for state_key, h5_name in traj_keys.items()
+                if state_key in state and state[state_key] is not None
+            }
+            if traj_data:
+                tg = f.create_group("trajectory")
+                for h5_name, arr in traj_data.items():
+                    tg.create_dataset(
+                        h5_name,
+                        data=np.asarray(arr, dtype=np.float32),
+                        compression="gzip",
+                        compression_opts=4,
+                    )
+
+            # ---- scalar training metrics as root attributes --------------
+            f.attrs["episode"]          = state["episode"]
+            f.attrs["global_step"]      = state["global_step"]
+            f.attrs["ep_reward"]        = float(state["ep_reward"])
+            f.attrs["mean_reward_100"]  = float(state["mean_reward"])
+            f.attrs["total_loss"]       = float(state["total_loss"])
+
+            # ---- optional experiment metadata ----------------------------
+            for meta_key in (
+                "Re", "geometry", "actuation", "algorithm", "convergence_episode"
+            ):
+                if meta_key in state:
+                    f.attrs[meta_key] = state[meta_key]
+            # Provide a sensible default for algorithm if not set
+            if "algorithm" not in f.attrs:
+                f.attrs["algorithm"] = "PPO"
+
         self._saved.append(path)
         print(f"  checkpoint -> {path}")
 
-        # Prune old checkpoints (skip the "final" one)
+        # Prune old checkpoints (never prune the "final" one)
         while len(self._saved) > self.keep_last:
             old = self._saved.pop(0)
             if old.exists() and "final" not in old.name:
                 old.unlink()
+
+    # ------------------------------------------------------------------
+    # Callback hooks
+    # ------------------------------------------------------------------
 
     def on_rollout_end(self, state: Dict[str, Any]) -> None:
         ep = state["episode"]
@@ -265,109 +395,3 @@ def default_callbacks(
             log_interval=log_interval,
         ))
     return cbs
-
-# ---------------------------------------------------------------------------
-# Frame Export (for video stitching)
-# ---------------------------------------------------------------------------
- 
-class FrameExportCallback(Callback):
-    """
-    Saves a matplotlib PNG frame every `frame_interval` environment steps.
-    Plots the 6 probe signals from the most recent observation so you have
-    a visual trace of the flow state over time.
- 
-    Frames are written to:
-        <save_dir>/frames/frame_{global_step:08d}.png
- 
-    Stitch into a video with scripts/make_video.py (or ffmpeg directly):
-        ffmpeg -framerate 30 -pattern_type glob -i 'frames/*.png' \
-               -c:v libx264 -pix_fmt yuv420p output.mp4
- 
-    Parameters
-    ----------
-    frame_interval : int
-        Save a frame every this many global env steps.
-    n_probes : int
-        Number of probe channels to plot (default 6).
-    """
-    def __init__(self, frame_interval: int = 50, n_probes: int = 6):
-        self.frame_interval = frame_interval
-        self.n_probes       = n_probes
-        self._frame_dir: Optional[Path] = None
-        self._last_step     = -1
- 
-        # Lazy import so matplotlib is optional
-        self._plt = None
- 
-    def _ensure_init(self, state: Dict[str, Any]):
-        if self._frame_dir is not None:
-            return
-        self._frame_dir = state["save_dir"] / "frames"
-        self._frame_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            import matplotlib
-            matplotlib.use("Agg")   # non-interactive backend, safe for HPC
-            import matplotlib.pyplot as plt
-            self._plt = plt
-        except ImportError:
-            print("  [FrameExportCallback] matplotlib not found -- frame export disabled.")
- 
-    def on_rollout_end(self, state: Dict[str, Any]) -> None:
-        self._ensure_init(state)
-        if self._plt is None:
-            return
- 
-        step = state["global_step"]
-        # Align to interval boundary; avoid duplicate saves within same interval
-        if step == self._last_step:
-            return
-        if step % self.frame_interval != 0 and step - self._last_step < self.frame_interval:
-            return
- 
-        self._last_step = step
-        plt = self._plt
- 
-        # Pull the last raw observation from the env buffer
-        env  = state["env"]
-        buf  = env._buf
-        obs  = buf._buf.copy()          # (buffer_len, n_probes)
-        mean = buf.obs_mean
-        std  = buf.obs_std
-        # De-normalise for interpretable units
-        obs_real = obs * std[None, :] + mean[None, :]
- 
-        fig, axes = plt.subplots(
-            self.n_probes, 1,
-            figsize=(10, 2 * self.n_probes),
-            sharex=True,
-        )
-        if self.n_probes == 1:
-            axes = [axes]
- 
-        t = np.arange(len(obs_real))
-        for i, ax in enumerate(axes):
-            if i < obs_real.shape[1]:
-                ax.plot(t, obs_real[:, i], linewidth=0.8, color=f"C{i}")
-                ax.set_ylabel(f"probe {i}", fontsize=7)
-                ax.tick_params(labelsize=6)
-                ax.grid(True, linewidth=0.3)
- 
-        axes[-1].set_xlabel("buffer index (oldest → newest)", fontsize=7)
-        fig.suptitle(
-            f"Probe signals  |  step={step:,}  |  ep={state['episode']}  |"
-            f"  reward={state.get('ep_reward', 0.0):.4f}",
-            fontsize=9,
-        )
-        fig.tight_layout()
- 
-        out = self._frame_dir / f"frame_{step:08d}.png"
-        fig.savefig(out, dpi=120, bbox_inches="tight")
-        plt.close(fig)
- 
-    def on_training_end(self, state: Dict[str, Any]) -> None:
-        if self._frame_dir is not None:
-            n = len(list(self._frame_dir.glob("*.png")))
-            print(f"  Frame export complete: {n} frames in {self._frame_dir}")
-            print(f"  To make a video:")
-            print(f"    python scripts/make_video.py --frames {self._frame_dir} --out video.mp4")
- 
