@@ -265,3 +265,109 @@ def default_callbacks(
             log_interval=log_interval,
         ))
     return cbs
+
+# ---------------------------------------------------------------------------
+# Frame Export (for video stitching)
+# ---------------------------------------------------------------------------
+ 
+class FrameExportCallback(Callback):
+    """
+    Saves a matplotlib PNG frame every `frame_interval` environment steps.
+    Plots the 6 probe signals from the most recent observation so you have
+    a visual trace of the flow state over time.
+ 
+    Frames are written to:
+        <save_dir>/frames/frame_{global_step:08d}.png
+ 
+    Stitch into a video with scripts/make_video.py (or ffmpeg directly):
+        ffmpeg -framerate 30 -pattern_type glob -i 'frames/*.png' \
+               -c:v libx264 -pix_fmt yuv420p output.mp4
+ 
+    Parameters
+    ----------
+    frame_interval : int
+        Save a frame every this many global env steps.
+    n_probes : int
+        Number of probe channels to plot (default 6).
+    """
+    def __init__(self, frame_interval: int = 50, n_probes: int = 6):
+        self.frame_interval = frame_interval
+        self.n_probes       = n_probes
+        self._frame_dir: Optional[Path] = None
+        self._last_step     = -1
+ 
+        # Lazy import so matplotlib is optional
+        self._plt = None
+ 
+    def _ensure_init(self, state: Dict[str, Any]):
+        if self._frame_dir is not None:
+            return
+        self._frame_dir = state["save_dir"] / "frames"
+        self._frame_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            import matplotlib
+            matplotlib.use("Agg")   # non-interactive backend, safe for HPC
+            import matplotlib.pyplot as plt
+            self._plt = plt
+        except ImportError:
+            print("  [FrameExportCallback] matplotlib not found -- frame export disabled.")
+ 
+    def on_rollout_end(self, state: Dict[str, Any]) -> None:
+        self._ensure_init(state)
+        if self._plt is None:
+            return
+ 
+        step = state["global_step"]
+        # Align to interval boundary; avoid duplicate saves within same interval
+        if step == self._last_step:
+            return
+        if step % self.frame_interval != 0 and step - self._last_step < self.frame_interval:
+            return
+ 
+        self._last_step = step
+        plt = self._plt
+ 
+        # Pull the last raw observation from the env buffer
+        env  = state["env"]
+        buf  = env._buf
+        obs  = buf._buf.copy()          # (buffer_len, n_probes)
+        mean = buf.obs_mean
+        std  = buf.obs_std
+        # De-normalise for interpretable units
+        obs_real = obs * std[None, :] + mean[None, :]
+ 
+        fig, axes = plt.subplots(
+            self.n_probes, 1,
+            figsize=(10, 2 * self.n_probes),
+            sharex=True,
+        )
+        if self.n_probes == 1:
+            axes = [axes]
+ 
+        t = np.arange(len(obs_real))
+        for i, ax in enumerate(axes):
+            if i < obs_real.shape[1]:
+                ax.plot(t, obs_real[:, i], linewidth=0.8, color=f"C{i}")
+                ax.set_ylabel(f"probe {i}", fontsize=7)
+                ax.tick_params(labelsize=6)
+                ax.grid(True, linewidth=0.3)
+ 
+        axes[-1].set_xlabel("buffer index (oldest → newest)", fontsize=7)
+        fig.suptitle(
+            f"Probe signals  |  step={step:,}  |  ep={state['episode']}  |"
+            f"  reward={state.get('ep_reward', 0.0):.4f}",
+            fontsize=9,
+        )
+        fig.tight_layout()
+ 
+        out = self._frame_dir / f"frame_{step:08d}.png"
+        fig.savefig(out, dpi=120, bbox_inches="tight")
+        plt.close(fig)
+ 
+    def on_training_end(self, state: Dict[str, Any]) -> None:
+        if self._frame_dir is not None:
+            n = len(list(self._frame_dir.glob("*.png")))
+            print(f"  Frame export complete: {n} frames in {self._frame_dir}")
+            print(f"  To make a video:")
+            print(f"    python scripts/make_video.py --frames {self._frame_dir} --out video.mp4")
+ 

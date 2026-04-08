@@ -1,73 +1,84 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # scripts/train_local.py
 """
-Single-node training entrypoint. Thin wrapper around ppo_joint.py
-so you can run from the repo root without worrying about module paths.
+Single-node MPI launcher for HR-SSA.
 
-Usage (from repo root, inside venv-firedrake):
-    python scripts/train_local.py --config configs/pinball_re100.yaml
-    python scripts/train_local.py --config configs/pinball_re150.yaml --resume checkpoints/hr_ssa_re150/checkpoint_ep00050.pt
-    python scripts/train_local.py  # uses PPOConfig defaults (Re=100)
+Usage
+-----
+  # 8 single-rank Firedrake sims  (fastest per-step on a medium mesh)
+  mpiexec -n 8 --bind-to none python -m scripts.train_local \
+      --config configs/pinball_re100.yaml --timesteps 5000
+
+  # 4 two-rank Firedrake sims  (better PETSc scaling for fine meshes)
+  mpiexec -n 8 --bind-to none python -m scripts.train_local \
+      --config configs/pinball_re100.yaml --timesteps 5000 --ranks-per-env 2
+
+The --ranks-per-env value MUST be set before ppo_joint (and therefore
+Firedrake/PETSc) is imported, so it is written to an environment variable
+read at module-load time by ppo_joint.py.
 """
 
-import sys
-import os
-
-# Disable CUDA visibility
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
-
-# Ensure repo root is on sys.path regardless of where script is called from
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
-
 import argparse
-from training.ppo_joint import PPOConfig, HRSSATrainer
-from training.callbacks import default_callbacks
+import os
+import warnings
+
+warnings.filterwarnings("ignore")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="HR-SSA MPI Training")
+    parser.add_argument("--config",         type=str, required=True)
+    parser.add_argument("--timesteps",      type=int, default=5000)
+    parser.add_argument("--resume",         type=str, default=None)
+    parser.add_argument(
+        "--ranks-per-env", type=int, default=1,
+        help="Number of MPI ranks per Firedrake simulation. "
+             "Total world size must be divisible by this value. "
+             "Default 1 gives one independent sim per rank.",
+    )
+    return parser.parse_args()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="HR-SSA local training")
-    parser.add_argument(
-        "--config", type=str, default=None,
-        help="Path to YAML config (e.g. configs/pinball_re100.yaml). "
-             "If omitted, PPOConfig defaults are used (Re=100, 2D)."
-    )
-    parser.add_argument(
-        "--resume", type=str, default=None,
-        help="Path to a .pt checkpoint to resume from."
-    )
-    parser.add_argument(
-        "--wandb-project", type=str, default=None,
-        help="Weights & Biases project name. If omitted, W&B is disabled."
-    )
-    parser.add_argument(
-        "--timesteps", type=int, default=None,
-        help="Override total_timesteps from config."
-    )
-    args = parser.parse_args()
+    args = parse_args()
 
-    cfg = PPOConfig.from_yaml(args.config) if args.config else PPOConfig()
-    if args.timesteps is not None:
-        cfg.total_timesteps = args.timesteps
+    # Set env var BEFORE importing ppo_joint so PETSc sees the subcommunicator.
+    os.environ["HRSSA_RANKS_PER_ENV"] = str(args.ranks_per_env)
 
-    print("=" * 60)
-    print(f"  HR-SSA Training")
-    print(f"  Re={cfg.Re}  mesh={cfg.mesh}  substeps={cfg.num_substeps}")
-    print(f"  total_timesteps={cfg.total_timesteps:,}")
-    print(f"  run_name={cfg.run_name}")
-    print(f"  save_dir={cfg.save_dir}/{cfg.run_name}")
-    print("=" * 60)
-
-    callbacks = default_callbacks(
-        log_interval=cfg.log_interval,
-        save_interval=cfg.save_interval,
-        wandb_project=args.wandb_project,
-        wandb_config=cfg.__dict__,
+    # Only import after the env var is set
+    from training.ppo_joint import (
+        HRSSATrainer, PPOConfig, is_global_rank0, _WORLD_RANK
     )
+
+    cfg = PPOConfig.from_yaml(args.config)
+    cfg.total_timesteps = args.timesteps
 
     trainer = HRSSATrainer(cfg)
-    trainer.train(resume_from=args.resume, callbacks=callbacks)
+
+    if args.resume:
+        trainer.load(args.resume)
+
+    obs = trainer.env.reset()
+    h   = trainer.manager.init_hidden(1).to(trainer.device)
+
+    while trainer.global_step < cfg.total_timesteps:
+        obs, h, ep_rewards_list = trainer.collect_rollout(obs, h)
+        loss = trainer.update()
+
+        if is_global_rank0() and trainer.episode > 0 and trainer.episode % cfg.save_interval == 0:
+            trainer.save()
+
+        if is_global_rank0() and ep_rewards_list:
+            mean_ep = sum(ep_rewards_list) / len(ep_rewards_list)
+            print(
+                f"[Step {trainer.global_step:7d}] "
+                f"loss={loss:.4f}  mean_ep_reward={mean_ep:.3f}",
+                flush=True,
+            )
+
+    if is_global_rank0():
+        trainer.save(tag="final")
+        print("Training complete. Checkpoints saved to:", cfg.save_dir, flush=True)
 
 
 if __name__ == "__main__":
