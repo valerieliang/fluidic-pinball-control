@@ -168,6 +168,15 @@ class CheckpointCallback(Callback):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _mpi_rank() -> int:
+        """Return MPI world rank, or 0 if MPI is not in use."""
+        try:
+            from mpi4py import MPI
+            return MPI.COMM_WORLD.Get_rank()
+        except ImportError:
+            return 0
+
+    @staticmethod
     def _state_dict_to_bytes(module_or_optim) -> np.ndarray:
         """Serialise a PyTorch state-dict to a 1-D uint8 numpy array."""
         buf = io.BytesIO()
@@ -175,6 +184,11 @@ class CheckpointCallback(Callback):
         return np.frombuffer(buf.getvalue(), dtype=np.uint8)
 
     def _save(self, state: Dict[str, Any], tag: str) -> None:
+        # Only rank 0 writes -- prevents all MPI ranks racing to lock the
+        # same HDF5 file (BlockingIOError / errno 11 under Open MPI).
+        if self._mpi_rank() != 0:
+            return
+
         try:
             import h5py
         except ImportError as exc:

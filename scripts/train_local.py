@@ -1,84 +1,100 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # scripts/train_local.py
 """
-Single-node MPI launcher for HR-SSA.
+Single-node training entrypoint.
 
-Usage
------
-  # 8 single-rank Firedrake sims  (fastest per-step on a medium mesh)
-  mpiexec -n 8 --bind-to none python -m scripts.train_local \
-      --config configs/pinball_re100.yaml --timesteps 5000
+MPI topology
+------------
+ALL ranks run the full training loop because every env.step() / env.reset()
+triggers a collective PETSc solve that every rank must participate in.
 
-  # 4 two-rank Firedrake sims  (better PETSc scaling for fine meshes)
-  mpiexec -n 8 --bind-to none python -m scripts.train_local \
-      --config configs/pinball_re100.yaml --timesteps 5000 --ranks-per-env 2
+Only rank 0 does meaningful RL work (policy updates, logging, saving).
+Non-root ranks call the same env methods but ignore return values, and
+skip all bookkeeping that doesn't involve a collective operation.
 
-The --ranks-per-env value MUST be set before ppo_joint (and therefore
-Firedrake/PETSc) is imported, so it is written to an environment variable
-read at module-load time by ppo_joint.py.
+Usage (from repo root, inside venv-firedrake):
+    mpiexec -n 8 python scripts/train_local.py --config configs/pinball_re100.yaml
 """
 
-import argparse
+import sys
 import os
-import warnings
 
-warnings.filterwarnings("ignore")
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+import argparse
+import time
+from training.ppo_joint import PPOConfig, HRSSATrainer
+from training.callbacks import default_callbacks
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="HR-SSA MPI Training")
-    parser.add_argument("--config",         type=str, required=True)
-    parser.add_argument("--timesteps",      type=int, default=5000)
-    parser.add_argument("--resume",         type=str, default=None)
-    parser.add_argument(
-        "--ranks-per-env", type=int, default=1,
-        help="Number of MPI ranks per Firedrake simulation. "
-             "Total world size must be divisible by this value. "
-             "Default 1 gives one independent sim per rank.",
-    )
-    return parser.parse_args()
+def get_mpi_rank() -> int:
+    try:
+        from mpi4py import MPI
+        return MPI.COMM_WORLD.Get_rank()
+    except ImportError:
+        return 0
+
+
+def get_mpi_size() -> int:
+    try:
+        from mpi4py import MPI
+        return MPI.COMM_WORLD.Get_size()
+    except ImportError:
+        return 1
+
+
+def rlog(rank: int, msg: str):
+    print(f"[rank {rank}] {msg}", flush=True)
 
 
 def main():
-    args = parse_args()
+    rank = get_mpi_rank()
+    size = get_mpi_size()
 
-    # Set env var BEFORE importing ppo_joint so PETSc sees the subcommunicator.
-    os.environ["HRSSA_RANKS_PER_ENV"] = str(args.ranks_per_env)
+    rlog(rank, f"started (pid={os.getpid()}, {size} total ranks)")
 
-    # Only import after the env var is set
-    from training.ppo_joint import (
-        HRSSATrainer, PPOConfig, is_global_rank0, _WORLD_RANK
-    )
+    parser = argparse.ArgumentParser(description="HR-SSA local training")
+    parser.add_argument("--config",        type=str, default=None)
+    parser.add_argument("--resume",        type=str, default=None)
+    parser.add_argument("--wandb-project", type=str, default=None)
+    parser.add_argument("--timesteps",     type=int, default=None)
+    args = parser.parse_args()
 
-    cfg = PPOConfig.from_yaml(args.config)
-    cfg.total_timesteps = args.timesteps
+    cfg = PPOConfig.from_yaml(args.config) if args.config else PPOConfig()
+    if args.timesteps is not None:
+        cfg.total_timesteps = args.timesteps
 
+    if rank == 0:
+        print("=" * 60)
+        print(f"  HR-SSA Training  (rank 0 of {size} MPI processes)")
+        print(f"  Re={cfg.Re}  mesh={cfg.mesh}  substeps={cfg.num_substeps}")
+        print(f"  total_timesteps={cfg.total_timesteps:,}")
+        print(f"  run_name={cfg.run_name}")
+        print(f"  save_dir={cfg.save_dir}/{cfg.run_name}")
+        print("=" * 60, flush=True)
+
+    rlog(rank, "building HRSSATrainer...")
+    t0 = time.time()
     trainer = HRSSATrainer(cfg)
+    rlog(rank, f"HRSSATrainer ready ({time.time()-t0:.1f}s)")
 
-    if args.resume:
-        trainer.load(args.resume)
+    # All ranks run train() together so that every collective PETSc solve
+    # inside env.step()/env.reset() has all ranks present.
+    # Rank-gating of logging/saving happens inside train() and save().
+    callbacks = default_callbacks(
+        log_interval=cfg.log_interval,
+        save_interval=cfg.save_interval,
+        wandb_project=args.wandb_project if rank == 0 else None,
+        wandb_config=cfg.__dict__,
+    ) if rank == 0 else []
 
-    obs = trainer.env.reset()
-    h   = trainer.manager.init_hidden(1).to(trainer.device)
-
-    while trainer.global_step < cfg.total_timesteps:
-        obs, h, ep_rewards_list = trainer.collect_rollout(obs, h)
-        loss = trainer.update()
-
-        if is_global_rank0() and trainer.episode > 0 and trainer.episode % cfg.save_interval == 0:
-            trainer.save()
-
-        if is_global_rank0() and ep_rewards_list:
-            mean_ep = sum(ep_rewards_list) / len(ep_rewards_list)
-            print(
-                f"[Step {trainer.global_step:7d}] "
-                f"loss={loss:.4f}  mean_ep_reward={mean_ep:.3f}",
-                flush=True,
-            )
-
-    if is_global_rank0():
-        trainer.save(tag="final")
-        print("Training complete. Checkpoints saved to:", cfg.save_dir, flush=True)
+    rlog(rank, "entering train()")
+    trainer.train(resume_from=args.resume, callbacks=callbacks)
+    rlog(rank, "train() returned, exiting")
 
 
 if __name__ == "__main__":
