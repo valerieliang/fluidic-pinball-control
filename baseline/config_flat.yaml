@@ -15,8 +15,11 @@ reward_omega: 1.0
 # Mode toggle (baseline PPO)
 use_hrssa: false
 debug: false
-# Toggle for regime encoder
-use_regime_encoder: false
+
+# Regime observation parameters (only used if use_hrssa=true)
+buffer_len: 50
+embed_dim: 16
+use_regime_encoder: false 
 
 # Model
 hidden_dim: 64

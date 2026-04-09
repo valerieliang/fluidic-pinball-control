@@ -64,14 +64,20 @@ class PinballEnv(gym.Env):
         # --- Buffer / spectral embedding (only if HR-SSA mode) ---
         self.n_probes   = cfg.get("n_probes", 6)
         self.buffer_len = cfg.get("buffer_len", 50)
-        self.embed_dim  = cfg.get("embed_dim", 16)
+        self.embed_dim  = cfg.get("embed_dim", 16)  # Add default value
+        
+        # Fix zero or negative embed_dim
+        if self.embed_dim <= 0:
+            print(f"[rank {_rank()}][PinballEnv] Warning: embed_dim={self.embed_dim} is invalid, setting to 16")
+            self.embed_dim = 16
         
         if self._use_hrssa:
+            # FIXED: Use cfg instead of config
             self._buf = RegimeObsBuffer(
                 n_probes=self.n_probes,
                 buffer_len=self.buffer_len,
                 embed_dim=self.embed_dim,
-                use_encoder=config.get("use_regime_encoder", True)
+                use_encoder=cfg.get("use_regime_encoder", True)  # Fixed: cfg instead of config
             )
             obs_dim = self.n_probes + self.embed_dim
         else:

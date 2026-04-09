@@ -139,6 +139,8 @@ class FlatPPOTrainer:
             "buffer_len": 1,  # Not used in flat PPO
             "embed_dim": 0,   # No embedding for flat PPO
             "warmup_steps": cfg.warmup_steps,
+            "use_hrssa": False,  # Force flat PPO mode
+            "use_regime_encoder": False,  # Disable encoder
         })
         
         # Override observation to use only raw probes (no embedding)
