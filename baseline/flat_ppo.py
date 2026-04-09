@@ -361,8 +361,8 @@ class FlatPPOTrainer:
             "global_step": self.global_step,
             "policy": self.policy.state_dict(),
             "optimizer": self.optimizer.state_dict(),
-            "obs_mean": self.env._buf.obs_mean,
-            "obs_std": self.env._buf.obs_std,
+            "obs_mean": self.env.obs_mean,
+            "obs_std": self.env.obs_std,
             "cfg": self.cfg,
         }, path)
         print(f"  checkpoint -> {path}", flush=True)
@@ -374,7 +374,11 @@ class FlatPPOTrainer:
         self.global_step = ckpt["global_step"]
         self.policy.load_state_dict(ckpt["policy"])
         self.optimizer.load_state_dict(ckpt["optimizer"])
-        self.env._buf.obs_mean = ckpt["obs_mean"]
-        self.env._buf.obs_std = ckpt["obs_std"]
+        if self.env._use_hrssa and self.env._buf is not None:
+            self.env._buf.obs_mean = ckpt["obs_mean"]
+            self.env._buf.obs_std = ckpt["obs_std"]
+        else:
+            self.env._obs_mean = ckpt["obs_mean"]
+            self.env._obs_std = ckpt["obs_std"]
         self.env._normalizer_fitted = True
         print(f"  loaded checkpoint from {path}", flush=True)
