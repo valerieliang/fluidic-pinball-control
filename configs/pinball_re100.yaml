@@ -19,6 +19,10 @@ buffer_len: 35
 embed_dim: 16
 warmup_steps: 200
 
+# --- Mode toggle ---
+use_hrssa: true
+debug: false
+
 # --- Reward ---
 # r = -|sum(C_D,i)| - omega * |sum(C_L,i)|
 # Uncontrolled baseline: C_D_bar ~ 2.904, St ~ 0.088

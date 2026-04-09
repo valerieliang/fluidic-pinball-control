@@ -1,0 +1,38 @@
+# baseline/config_flat.yaml
+# Flat PPO baseline configuration
+
+run_name: flat_ppo_re100_2d
+
+# Environment
+Re: 100
+mesh: medium
+dt: 1.0e-2
+num_substeps: 170
+n_probes: 6
+warmup_steps: 200
+reward_omega: 1.0
+
+# Mode toggle (baseline PPO)
+use_hrssa: false
+debug: false
+
+# Model
+hidden_dim: 64
+
+# PPO
+total_timesteps: 500000
+n_steps: 2048
+n_epochs: 10
+batch_size: 64
+gamma: 0.99
+gae_lambda: 0.95
+clip_eps: 0.2
+vf_coef: 0.5
+ent_coef: 0.01
+max_grad_norm: 0.5
+lr: 3.0e-4
+
+# Logging
+log_interval: 1
+save_interval: 10
+save_dir: checkpoints

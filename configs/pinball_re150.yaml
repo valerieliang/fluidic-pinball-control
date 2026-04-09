@@ -20,6 +20,10 @@ buffer_len: 40
 embed_dim: 16
 warmup_steps: 200
 
+# --- Mode toggle ---
+use_hrssa: true
+debug: false
+
 # --- Reward ---
 # Uncontrolled baseline: C_D_bar ~ 2.922, St ~ 0.120
 reward_omega: 1.0

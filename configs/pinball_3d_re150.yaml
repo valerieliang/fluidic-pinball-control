@@ -23,6 +23,10 @@ buffer_len: 50
 embed_dim: 16
 warmup_steps: 300         # longer warmup -- 3D flow takes more time to develop
 
+# --- Mode toggle ---
+use_hrssa: true
+debug: false
+
 # --- Reward ---
 # Uncontrolled baseline: C_D_bar ~ 2.949, St ~ 0.113
 reward_omega: 1.0
