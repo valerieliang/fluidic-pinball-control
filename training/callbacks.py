@@ -184,8 +184,6 @@ class CheckpointCallback(Callback):
         return np.frombuffer(buf.getvalue(), dtype=np.uint8)
 
     def _save(self, state: Dict[str, Any], tag: str) -> None:
-        # Only rank 0 writes -- prevents all MPI ranks racing to lock the
-        # same HDF5 file (BlockingIOError / errno 11 under Open MPI).
         if self._mpi_rank() != 0:
             return
 
@@ -197,84 +195,75 @@ class CheckpointCallback(Callback):
                 "Install it with: pip install h5py"
             ) from exc
 
-        path = state["save_dir"] / f"checkpoint_{tag}.h5"
+        Re   = state.get("Re", "unknown")
+        path = state["save_dir"] / f"pinball_re{Re}_{tag}.h5"
 
         with h5py.File(path, "w") as f:
 
-            # ---- model weights (serialised PyTorch state dicts) ----------
+            # ---- /metadata -----------------------------------------------
+            mg = f.create_group("metadata")
+            mg.attrs["description"] = f"Fluidic Pinball Re={Re} PPO training run"
+            mg.attrs["Re"]          = Re
+            mg.attrs["geometry"]    = state.get("geometry", "fluidic_pinball")
+            mg.attrs["actuation"]   = state.get("actuation", "cylinder_rotation")
+            mg.attrs["algorithm"]   = state.get("algorithm", "PPO")
+            mg.attrs["episode"]     = state["episode"]
+            mg.attrs["global_step"] = state["global_step"]
+
+            # ---- /timeseries ---------------------------------------------
+            tg = f.create_group("timeseries")
+
+            reward_buf = state.get("reward_buffer")
+            obs_buf    = state.get("obs_buffer")
+            action_buf = state.get("action_buffer")
+
+            if reward_buf is not None and len(reward_buf) > 0:
+                n = len(reward_buf)
+                mg.attrs["num_steps"] = n
+
+                tg.create_dataset("time",   data=np.arange(n, dtype=np.float32), compression="gzip")
+                tg.create_dataset("reward", data=reward_buf.astype(np.float32),  compression="gzip")
+
+                if obs_buf is not None and obs_buf.shape[1] >= 6:
+                    probes = obs_buf[:, :6]
+                    tg.create_dataset("drag",   data=probes[:, 0], compression="gzip")
+                    tg.create_dataset("drag_2", data=probes[:, 1], compression="gzip")
+                    tg.create_dataset("drag_3", data=probes[:, 2], compression="gzip")
+                    tg.create_dataset("CD",     data=probes[:, :3].mean(axis=1).astype(np.float32), compression="gzip")
+                    tg.create_dataset("CL1",    data=probes[:, 3], compression="gzip")
+                    tg.create_dataset("CL2",    data=probes[:, 4], compression="gzip")
+                    tg.create_dataset("CL3",    data=probes[:, 5], compression="gzip")
+
+                if action_buf is not None:
+                    tg.create_dataset("action_front",    data=action_buf[:, 0], compression="gzip")
+                    tg.create_dataset("action_rear_top", data=action_buf[:, 1], compression="gzip")
+                    tg.create_dataset("action_rear_bot", data=action_buf[:, 2], compression="gzip")
+
+            # ---- /training -----------------------------------------------
+            trg = f.create_group("training")
+            trg.attrs["mean_reward_100"] = float(state["mean_reward"])
+            trg.attrs["ep_reward_last"]  = float(state["ep_reward"])
+            trg.attrs["total_loss"]      = float(state["total_loss"])
+
+            # ---- /weights ------------------------------------------------
             wg = f.create_group("weights")
-            wg.create_dataset(
-                "manager",
-                data=self._state_dict_to_bytes(state["manager"]),
+            wg.attrs["note"] = (
+                "Load with: buf=io.BytesIO(f['weights/manager'][:].tobytes()); "
+                "model.load_state_dict(torch.load(buf))"
             )
-            wg.create_dataset(
-                "sub_policies",
-                data=self._state_dict_to_bytes(state["sub_policies"]),
-            )
-            wg.create_dataset(
-                "encoder",
-                data=self._state_dict_to_bytes(state["encoder"]),
-            )
-            wg.create_dataset(
-                "optimizer",
-                data=self._state_dict_to_bytes(state["optimizer"]),
-            )
+            wg.create_dataset("manager",      data=self._state_dict_to_bytes(state["manager"]))
+            wg.create_dataset("sub_policies", data=self._state_dict_to_bytes(state["sub_policies"]))
+            wg.create_dataset("encoder",      data=self._state_dict_to_bytes(state["encoder"]))
+            wg.create_dataset("optimizer",    data=self._state_dict_to_bytes(state["optimizer"]))
 
-            # ---- observation normalisation stats -------------------------
             ng = f.create_group("norm")
-            ng.create_dataset(
-                "obs_mean",
-                data=np.asarray(state["obs_mean"], dtype=np.float32),
-            )
-            ng.create_dataset(
-                "obs_std",
-                data=np.asarray(state["obs_std"], dtype=np.float32),
-            )
-
-            # ---- trajectory buffers (optional) ---------------------------
-            traj_keys = {
-                "obs_buffer":    "observations",
-                "action_buffer": "actions",
-                "reward_buffer": "rewards",
-                "drag_buffer":   "drags",
-                "lift_buffer":   "lifts",
-            }
-            traj_data = {
-                h5_name: state[state_key]
-                for state_key, h5_name in traj_keys.items()
-                if state_key in state and state[state_key] is not None
-            }
-            if traj_data:
-                tg = f.create_group("trajectory")
-                for h5_name, arr in traj_data.items():
-                    tg.create_dataset(
-                        h5_name,
-                        data=np.asarray(arr, dtype=np.float32),
-                        compression="gzip",
-                        compression_opts=4,
-                    )
-
-            # ---- scalar training metrics as root attributes --------------
-            f.attrs["episode"]          = state["episode"]
-            f.attrs["global_step"]      = state["global_step"]
-            f.attrs["ep_reward"]        = float(state["ep_reward"])
-            f.attrs["mean_reward_100"]  = float(state["mean_reward"])
-            f.attrs["total_loss"]       = float(state["total_loss"])
-
-            # ---- optional experiment metadata ----------------------------
-            for meta_key in (
-                "Re", "geometry", "actuation", "algorithm", "convergence_episode"
-            ):
-                if meta_key in state:
-                    f.attrs[meta_key] = state[meta_key]
-            # Provide a sensible default for algorithm if not set
-            if "algorithm" not in f.attrs:
-                f.attrs["algorithm"] = "PPO"
+            ng.attrs["note"] = "Observation normalisation stats for inference"
+            ng.create_dataset("obs_mean", data=np.asarray(state["obs_mean"], dtype=np.float32))
+            ng.create_dataset("obs_std",  data=np.asarray(state["obs_std"],  dtype=np.float32))
 
         self._saved.append(path)
         print(f"  checkpoint -> {path}")
 
-        # Prune old checkpoints (never prune the "final" one)
         while len(self._saved) > self.keep_last:
             old = self._saved.pop(0)
             if old.exists() and "final" not in old.name:

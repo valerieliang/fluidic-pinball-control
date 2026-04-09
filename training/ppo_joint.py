@@ -501,7 +501,7 @@ class HRSSATrainer:
     def save(self, tag: str = None) -> Path:
         import h5py, io
         label = tag or f"ep{self.episode:05d}"
-        path  = self.save_dir / f"checkpoint_{label}.h5"
+        path  = self.save_dir / f"pinball_re{self.cfg.Re}_{label}.h5"
         if self._mpi_rank() != 0:
             return path
 
@@ -510,28 +510,92 @@ class HRSSATrainer:
             torch.save(obj.state_dict(), buf)
             return np.frombuffer(buf.getvalue(), dtype=np.uint8)
 
+        n = self.buffer.ptr  # steps actually filled in current rollout
+
         with h5py.File(path, "w") as f:
+
+            # ----------------------------------------------------------------
+            # /metadata   -- human-readable run description and hyperparams
+            # ----------------------------------------------------------------
+            mg = f.create_group("metadata")
+            mg.attrs["description"]  = (
+                f"Fluidic Pinball Re={self.cfg.Re} PPO training run"
+            )
+            mg.attrs["Re"]           = self.cfg.Re
+            mg.attrs["dt"]           = self.cfg.dt
+            mg.attrs["mesh"]         = self.cfg.mesh
+            mg.attrs["num_substeps"] = self.cfg.num_substeps
+            mg.attrs["algorithm"]    = "PPO"
+            mg.attrs["geometry"]     = "fluidic_pinball"
+            mg.attrs["actuation"]    = "cylinder_rotation"
+            mg.attrs["run_name"]     = self.cfg.run_name
+            mg.attrs["episode"]      = self.episode
+            mg.attrs["global_step"]  = self.global_step
+            mg.attrs["num_steps"]    = n
+
+            # ----------------------------------------------------------------
+            # /timeseries   -- one row per env step, named like the ref file
+            # ----------------------------------------------------------------
+            tg = f.create_group("timeseries")
+
+            # Simulated time axis (control steps × dt × num_substeps)
+            step_dt = self.cfg.dt * self.cfg.num_substeps
+            time_arr = np.arange(n, dtype=np.float32) * step_dt
+            tg.create_dataset("time",   data=time_arr, compression="gzip")
+
+            tg.create_dataset("reward", data=self.buffer.rewards[:n].astype(np.float32), compression="gzip")
+
+            # Raw probe observations: columns 0..n_probes-1
+            obs = self.buffer.obs[:n]           # (n, obs_dim)
+            probes = obs[:, :self.cfg.n_probes] # (n, 6)
+
+            # Drag proxies: probes 0-2 track cylinder drag signals
+            tg.create_dataset("drag",   data=probes[:, 0], compression="gzip")  # front cylinder
+            tg.create_dataset("drag_2", data=probes[:, 1], compression="gzip")  # rear upper
+            tg.create_dataset("drag_3", data=probes[:, 2], compression="gzip")  # rear lower
+            # CD = mean drag proxy across all three cylinders
+            tg.create_dataset("CD",     data=probes[:, :3].mean(axis=1).astype(np.float32), compression="gzip")
+
+            # Lift proxies: probes 3-5
+            tg.create_dataset("CL1",    data=probes[:, 3], compression="gzip")
+            tg.create_dataset("CL2",    data=probes[:, 4], compression="gzip")
+            tg.create_dataset("CL3",    data=probes[:, 5], compression="gzip")
+
+            # Actions (cylinder angular velocities)
+            tg.create_dataset("action_front",    data=self.buffer.actions[:n, 0], compression="gzip")
+            tg.create_dataset("action_rear_top", data=self.buffer.actions[:n, 1], compression="gzip")
+            tg.create_dataset("action_rear_bot", data=self.buffer.actions[:n, 2], compression="gzip")
+
+            # Regime embedding (full latent for analysis)
+            tg.create_dataset("regime_embedding",
+                              data=self.buffer.embeds[:n].astype(np.float32),
+                              compression="gzip")
+
+            # ----------------------------------------------------------------
+            # /training   -- RL scalars for learning curve analysis
+            # ----------------------------------------------------------------
+            trg = f.create_group("training")
+            trg.attrs["mean_reward_100"] = float(np.mean(self.ep_rewards)) if self.ep_rewards else 0.0
+            trg.attrs["ep_reward_last"]  = float(self.ep_rewards[-1]) if self.ep_rewards else 0.0
+            trg.attrs["total_loss"]      = float(getattr(self, "_last_loss", 0.0))
+
+            # ----------------------------------------------------------------
+            # /weights   -- model state dicts (byte-packed for resuming)
+            # ----------------------------------------------------------------
             wg = f.create_group("weights")
+            wg.attrs["note"] = (
+                "Load with: buf=io.BytesIO(f['weights/manager'][:].tobytes()); "
+                "model.load_state_dict(torch.load(buf))"
+            )
             wg.create_dataset("manager",      data=state_dict_bytes(self.manager))
             wg.create_dataset("sub_policies", data=state_dict_bytes(self.sub_policies))
             wg.create_dataset("encoder",      data=state_dict_bytes(self.env._buf.encoder))
             wg.create_dataset("optimizer",    data=state_dict_bytes(self.optimizer))
+
             ng = f.create_group("norm")
+            ng.attrs["note"] = "Observation normalisation stats for inference"
             ng.create_dataset("obs_mean", data=np.asarray(self.env._buf.obs_mean, dtype=np.float32))
             ng.create_dataset("obs_std",  data=np.asarray(self.env._buf.obs_std,  dtype=np.float32))
-            if self.buffer.ptr > 0:
-                n = self.buffer.ptr
-                tg = f.create_group("trajectory")
-                tg.create_dataset("observations", data=self.buffer.obs[:n],     compression="gzip", compression_opts=4)
-                tg.create_dataset("actions",      data=self.buffer.actions[:n], compression="gzip", compression_opts=4)
-                tg.create_dataset("rewards",      data=self.buffer.rewards[:n], compression="gzip", compression_opts=4)
-            f.attrs["episode"]         = self.episode
-            f.attrs["global_step"]     = self.global_step
-            f.attrs["ep_reward"]       = float(self.ep_rewards[-1]) if self.ep_rewards else 0.0
-            f.attrs["mean_reward_100"] = float(np.mean(self.ep_rewards)) if self.ep_rewards else 0.0
-            f.attrs["Re"]              = self.cfg.Re
-            f.attrs["algorithm"]       = "PPO"
-            f.attrs["geometry"]        = "fluidic_pinball"
 
         print(f"  checkpoint -> {path}", flush=True)
         return path
@@ -540,6 +604,7 @@ class HRSSATrainer:
         import h5py, io
         p = Path(path)
         if p.suffix == ".pt":
+            # Legacy .pt support
             ckpt = torch.load(path, map_location=self.device)
             self.episode                = ckpt["episode"]
             self.global_step            = ckpt["global_step"]
@@ -550,12 +615,14 @@ class HRSSATrainer:
             self.env._buf.obs_mean      = ckpt["obs_mean"]
             self.env._buf.obs_std       = ckpt["obs_std"]
         else:
+            # HDF5 checkpoint (new readable format)
             def load_state_dict(obj, dataset):
                 buf = io.BytesIO(dataset[:].tobytes())
                 obj.load_state_dict(torch.load(buf, map_location=self.device))
             with h5py.File(path, "r") as f:
-                self.episode     = int(f.attrs["episode"])
-                self.global_step = int(f.attrs["global_step"])
+                meta = f["metadata"]
+                self.episode     = int(meta.attrs["episode"])
+                self.global_step = int(meta.attrs["global_step"])
                 load_state_dict(self.manager,          f["weights/manager"])
                 load_state_dict(self.sub_policies,     f["weights/sub_policies"])
                 load_state_dict(self.env._buf.encoder, f["weights/encoder"])
@@ -577,6 +644,12 @@ class HRSSATrainer:
         rank = self._mpi_rank()
         is_root = rank == 0
 
+        try:
+            from mpi4py import MPI
+            comm = MPI.COMM_WORLD
+        except ImportError:
+            comm = None
+
         if resume_from and is_root:
             self.load(resume_from)
 
@@ -586,9 +659,20 @@ class HRSSATrainer:
         cb_state = {}
 
         t0 = time.time()
-        while self.global_step < self.cfg.total_timesteps:
+        while True:
+            # Rank 0 decides whether to keep going; broadcast to all ranks
+            # so non-root ranks don't loop forever on a stale global_step.
+            # Must use a numpy array -- mpi4py Bcast rejects plain Python lists.
+            keep_going = np.array([self.global_step < self.cfg.total_timesteps], dtype=np.bool_)
+            if comm is not None:
+                comm.Bcast(keep_going, root=0)
+            if not keep_going[0]:
+                break
+
             obs, h, ep_rewards_list = self.collect_rollout(obs, h)
             mean_loss = self.update()   # no-op on non-root ranks
+            if is_root:
+                self._last_loss = mean_loss
 
             if is_root:
                 cb_state = {
@@ -626,6 +710,8 @@ class HRSSATrainer:
                 cb.on_training_end(cb_state)
 
         print(f"[rank {rank}] Training complete in {time.time() - t0:.1f}s", flush=True)
+
+        # All ranks close the env so PETSc shuts down cleanly
         self.env.close()
 
 

@@ -16,28 +16,38 @@ def _rank() -> int:
         return 0
 
 
-def _rlog(msg: str):
-    print(f"[rank {_rank()}][PinballEnv] {msg}", flush=True)
+def _rlog(msg: str, force: bool = False):
+    """Log only if debug is enabled or force=True."""
+    # We'll set the debug flag on the class instance, but need a fallback here
+    # This function gets replaced in __init__ with a bound method
+    pass
 
 
 class PinballEnv(gym.Env):
     """
     Gym-compatible wrapper around HydroGym's FlowEnv for the fluidic pinball.
-    Adapts the old 4-tuple step API and adds the regime spectral embedding
-    to the observation.
-
-    Observation: concatenation of raw probe readings (6,) and the
-                 regime spectral embedding (embed_dim,) from RegimeObsBuffer.
-    Action:      three cylinder angular velocities, passed through as-is.
+    
+    Set debug=True in config to enable verbose per-step logging.
+    Example: PinballEnv({"Re": 100, "debug": True})
     """
 
     metadata = {"render.modes": []}
 
     def __init__(self, config: dict = None):
         super().__init__()
-        _rlog("__init__ start")
-
+        
         cfg = config or {}
+        self._debug = cfg.get("debug", False)
+        
+        # Replace the global _rlog with a bound method that respects self._debug
+        self._log = lambda msg, force=False: print(
+            f"[rank {_rank()}][PinballEnv] {msg}", flush=True
+        ) if (self._debug or force) else None
+        
+        if self._debug:
+            self._log("__init__ start", force=True)
+        else:
+            print(f"[rank {_rank()}][PinballEnv] __init__ start", flush=True)
 
         env_config = {
             "flow": hgym.Pinball,
@@ -54,9 +64,9 @@ class PinballEnv(gym.Env):
             },
         }
 
-        _rlog("calling FlowEnv() (mesh partition + PETSc init)...")
+        self._log("calling FlowEnv() (mesh partition + PETSc init)...")
         self._env = FlowEnv(env_config)
-        _rlog("FlowEnv() done")
+        self._log("FlowEnv() done")
 
         # --- Buffer / spectral embedding ---
         self.n_probes   = cfg.get("n_probes",   6)
@@ -86,7 +96,15 @@ class PinballEnv(gym.Env):
 
         self._warmup_steps      = cfg.get("warmup_steps", 200)
         self._normalizer_fitted = False
-        _rlog(f"__init__ done  obs_dim={obs_dim}  warmup_steps={self._warmup_steps}")
+
+        # --- Episode termination ---
+        self._max_episode_steps = 200
+        self._step_count = 0
+
+        if not self._debug:
+            print(f"[rank {_rank()}][PinballEnv] __init__ done  obs_dim={obs_dim}  warmup_steps={self._warmup_steps}", flush=True)
+        else:
+            self._log(f"__init__ done  obs_dim={obs_dim}  warmup_steps={self._warmup_steps}", force=True)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -101,53 +119,63 @@ class PinballEnv(gym.Env):
         return np.concatenate([raw_obs, embed])
 
     def _fit_normalizer(self):
-        _rlog(f"_fit_normalizer start  ({self._warmup_steps} warmup steps)")
+        self._log(f"_fit_normalizer start  ({self._warmup_steps} warmup steps)")
         history = []
         raw = self._env.reset()
         history.append(self._raw_to_array(raw))
 
         for i in range(self._warmup_steps):
-            if i % 50 == 0:
-                _rlog(f"  warmup step {i}/{self._warmup_steps}")
+            if i % 50 == 0 and self._debug:
+                self._log(f"  warmup step {i}/{self._warmup_steps}")
             action = self._env.action_space.sample()
             raw, _, done, _ = self._env.step(action)
             history.append(self._raw_to_array(raw))
             if done:
-                _rlog(f"  warmup reset at step {i}")
+                self._log(f"  warmup reset at step {i}")
                 raw = self._env.reset()
                 history.append(self._raw_to_array(raw))
 
         self._buf.update_normalization(np.stack(history, axis=0))
         self._normalizer_fitted = True
-        _rlog("_fit_normalizer done")
+        self._log("_fit_normalizer done")
 
     # ------------------------------------------------------------------
-    # Gym API (old 4-tuple style to match HydroGym internals)
+    # Gym API
     # ------------------------------------------------------------------
 
     def reset(self):
-        _rlog("reset() called")
+        self._log("reset() called")
         if not self._normalizer_fitted:
             self._fit_normalizer()
 
         self._buf.reset()
         raw = self._env.reset()
         obs = self._make_obs(self._raw_to_array(raw))
-        _rlog("reset() done")
+
+        self._step_count = 0
+        self._log("reset() done")
         return obs
 
     def step(self, action):
         action = np.asarray(action, dtype=np.float32)
         raw_obs, reward, done, info = self._env.step(action)
         obs = self._make_obs(self._raw_to_array(raw_obs))
-        if done:
-            _rlog(f"step() -> done=True  reward={reward:.4f}")
+
+        self._step_count += 1
+        if self._step_count >= self._max_episode_steps:
+            done = True
+            self._log(f"step() -> episode limit reached, done=True  reward={reward:.4f}")
+
+        # Only log done=True messages if debug is on
+        if done and self._debug:
+            self._log(f"step() -> done=True  reward={reward:.4f}")
+            
         return obs, float(reward), bool(done), info
 
     def render(self, mode="human"):
         pass
 
     def close(self):
-        _rlog("close() called")
+        self._log("close() called")
         self._env.close()
-        _rlog("close() done")
+        self._log("close() done")
