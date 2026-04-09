@@ -24,6 +24,9 @@ warmup_steps: 200
 use_hrssa: true
 debug: false
 
+# --- Regime toggle ---
+use_regime_encoder: true
+
 # --- Reward ---
 # Uncontrolled baseline: C_D_bar ~ 2.922, St ~ 0.120
 reward_omega: 1.0

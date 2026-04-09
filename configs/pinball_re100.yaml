@@ -23,6 +23,9 @@ warmup_steps: 200
 use_hrssa: true
 debug: false
 
+# --- Regime toggle ---
+use_regime_encoder: true
+
 # --- Reward ---
 # r = -|sum(C_D,i)| - omega * |sum(C_L,i)|
 # Uncontrolled baseline: C_D_bar ~ 2.904, St ~ 0.088

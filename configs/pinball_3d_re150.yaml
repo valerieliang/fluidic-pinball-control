@@ -27,6 +27,9 @@ warmup_steps: 300         # longer warmup -- 3D flow takes more time to develop
 use_hrssa: true
 debug: false
 
+# --- Regime toggle ---
+use_regime_encoder: true
+
 # --- Reward ---
 # Uncontrolled baseline: C_D_bar ~ 2.949, St ~ 0.113
 reward_omega: 1.0

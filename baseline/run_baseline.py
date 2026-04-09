@@ -4,10 +4,15 @@
 Entry point for flat PPO baseline training with MPI support.
 """
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 import sys
 import os
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["GYM_WARNINGS"] = "false"
 
 # Add parent directory to path
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,7 +43,7 @@ def main():
     rank = get_mpi_rank()
     size = get_mpi_size()
     
-    print(f"[rank {rank}] started (pid={os.getpid()}, {size} total ranks)", flush=True)
+    # print(f"[rank {rank}] started (pid={os.getpid()}, {size} total ranks)", flush=True)
     
     parser = argparse.ArgumentParser(description="Flat PPO Baseline Training")
     parser.add_argument("--config", type=str, default="baseline/config_flat.yaml")

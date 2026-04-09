@@ -16,19 +16,17 @@ def _rank() -> int:
         return 0
 
 
-def _rlog(msg: str, force: bool = False):
-    """Log only if debug is enabled or force=True."""
-    # We'll set the debug flag on the class instance, but need a fallback here
-    # This function gets replaced in __init__ with a bound method
-    pass
-
-
 class PinballEnv(gym.Env):
     """
     Gym-compatible wrapper around HydroGym's FlowEnv for the fluidic pinball.
     
-    Set debug=True in config to enable verbose per-step logging.
-    Example: PinballEnv({"Re": 100, "debug": True})
+    Two modes:
+      - use_hrssa=True  (default): Full observation = raw probes + regime embedding
+      - use_hrssa=False (flat PPO): Observation = raw probes only
+    
+    Config options:
+        use_hrssa: bool = True   # Toggle HR-SSA vs flat mode
+        debug: bool = False      # Verbose per-step logging
     """
 
     metadata = {"render.modes": []}
@@ -37,17 +35,14 @@ class PinballEnv(gym.Env):
         super().__init__()
         
         cfg = config or {}
+        
+        # --- Mode toggles ---
+        self._use_hrssa = cfg.get("use_hrssa", True)
         self._debug = cfg.get("debug", False)
         
-        # Replace the global _rlog with a bound method that respects self._debug
-        self._log = lambda msg, force=False: print(
-            f"[rank {_rank()}][PinballEnv] {msg}", flush=True
-        ) if (self._debug or force) else None
-        
+        # Only print essential info when not debugging
         if self._debug:
-            self._log("__init__ start", force=True)
-        else:
-            print(f"[rank {_rank()}][PinballEnv] __init__ start", flush=True)
+            print(f"[rank {_rank()}][PinballEnv] __init__ start (use_hrssa={self._use_hrssa})", flush=True)
 
         env_config = {
             "flow": hgym.Pinball,
@@ -64,19 +59,24 @@ class PinballEnv(gym.Env):
             },
         }
 
-        self._log("calling FlowEnv() (mesh partition + PETSc init)...")
         self._env = FlowEnv(env_config)
-        self._log("FlowEnv() done")
 
-        # --- Buffer / spectral embedding ---
-        self.n_probes   = cfg.get("n_probes",   6)
+        # --- Buffer / spectral embedding (only if HR-SSA mode) ---
+        self.n_probes   = cfg.get("n_probes", 6)
         self.buffer_len = cfg.get("buffer_len", 50)
-        self.embed_dim  = cfg.get("embed_dim",  16)
-        self._buf = RegimeObsBuffer(
-            n_probes=self.n_probes,
-            buffer_len=self.buffer_len,
-            embed_dim=self.embed_dim,
-        )
+        self.embed_dim  = cfg.get("embed_dim", 16)
+        
+        if self._use_hrssa:
+            self._buf = RegimeObsBuffer(
+                n_probes=self.n_probes,
+                buffer_len=self.buffer_len,
+                embed_dim=self.embed_dim,
+                use_encoder=config.get("use_regime_encoder", True)
+            )
+            obs_dim = self.n_probes + self.embed_dim
+        else:
+            self._buf = None
+            obs_dim = self.n_probes
 
         # --- Spaces ---
         raw_act = self._env.action_space
@@ -86,7 +86,6 @@ class PinballEnv(gym.Env):
             dtype=np.float32,
         )
 
-        obs_dim = self.n_probes + self.embed_dim
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -102,9 +101,10 @@ class PinballEnv(gym.Env):
         self._step_count = 0
 
         if not self._debug:
-            print(f"[rank {_rank()}][PinballEnv] __init__ done  obs_dim={obs_dim}  warmup_steps={self._warmup_steps}", flush=True)
+            # Single line summary per rank
+            print(f"[rank {_rank()}][PinballEnv] ready (obs_dim={obs_dim}, use_hrssa={self._use_hrssa})", flush=True)
         else:
-            self._log(f"__init__ done  obs_dim={obs_dim}  warmup_steps={self._warmup_steps}", force=True)
+            print(f"[rank {_rank()}][PinballEnv] __init__ done  obs_dim={obs_dim}", flush=True)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -114,46 +114,56 @@ class PinballEnv(gym.Env):
         return np.array(raw_obs, dtype=np.float32)
 
     def _make_obs(self, raw_obs: np.ndarray) -> np.ndarray:
-        self._buf.push(raw_obs)
-        embed = self._buf.embed().detach().cpu().numpy()
-        return np.concatenate([raw_obs, embed])
+        if self._use_hrssa and self._buf is not None:
+            self._buf.push(raw_obs)
+            embed = self._buf.embed().detach().cpu().numpy()
+            return np.concatenate([raw_obs, embed])
+        else:
+            return raw_obs
 
     def _fit_normalizer(self):
-        self._log(f"_fit_normalizer start  ({self._warmup_steps} warmup steps)")
+        if self._debug:
+            print(f"[rank {_rank()}][PinballEnv] warmup start ({self._warmup_steps} steps)", flush=True)
+            
         history = []
         raw = self._env.reset()
         history.append(self._raw_to_array(raw))
 
         for i in range(self._warmup_steps):
-            if i % 50 == 0 and self._debug:
-                self._log(f"  warmup step {i}/{self._warmup_steps}")
             action = self._env.action_space.sample()
             raw, _, done, _ = self._env.step(action)
             history.append(self._raw_to_array(raw))
             if done:
-                self._log(f"  warmup reset at step {i}")
                 raw = self._env.reset()
                 history.append(self._raw_to_array(raw))
 
-        self._buf.update_normalization(np.stack(history, axis=0))
+        if self._use_hrssa and self._buf is not None:
+            self._buf.update_normalization(np.stack(history, axis=0))
+        else:
+            stacked = np.stack(history, axis=0)
+            self._obs_mean = stacked.mean(axis=0)
+            self._obs_std = stacked.std(axis=0).clip(1e-6)
+            
         self._normalizer_fitted = True
-        self._log("_fit_normalizer done")
+        
+        if self._debug:
+            print(f"[rank {_rank()}][PinballEnv] warmup done", flush=True)
 
     # ------------------------------------------------------------------
     # Gym API
     # ------------------------------------------------------------------
 
     def reset(self):
-        self._log("reset() called")
         if not self._normalizer_fitted:
             self._fit_normalizer()
 
-        self._buf.reset()
+        if self._use_hrssa and self._buf is not None:
+            self._buf.reset()
+            
         raw = self._env.reset()
         obs = self._make_obs(self._raw_to_array(raw))
 
         self._step_count = 0
-        self._log("reset() done")
         return obs
 
     def step(self, action):
@@ -164,11 +174,6 @@ class PinballEnv(gym.Env):
         self._step_count += 1
         if self._step_count >= self._max_episode_steps:
             done = True
-            self._log(f"step() -> episode limit reached, done=True  reward={reward:.4f}")
-
-        # Only log done=True messages if debug is on
-        if done and self._debug:
-            self._log(f"step() -> done=True  reward={reward:.4f}")
             
         return obs, float(reward), bool(done), info
 
@@ -176,6 +181,22 @@ class PinballEnv(gym.Env):
         pass
 
     def close(self):
-        self._log("close() called")
         self._env.close()
-        self._log("close() done")
+        
+    # ------------------------------------------------------------------
+    # Properties for checkpointing
+    # ------------------------------------------------------------------
+    
+    @property
+    def obs_mean(self):
+        if self._use_hrssa and self._buf is not None:
+            return self._buf.obs_mean
+        else:
+            return getattr(self, '_obs_mean', np.zeros(self.n_probes))
+            
+    @property
+    def obs_std(self):
+        if self._use_hrssa and self._buf is not None:
+            return self._buf.obs_std
+        else:
+            return getattr(self, '_obs_std', np.ones(self.n_probes))
