@@ -40,6 +40,9 @@ class PinballEnv(gym.Env):
         self._use_hrssa = cfg.get("use_hrssa", True)
         self._debug = cfg.get("debug", False)
         
+        # Store num_substeps for potential reward scaling
+        self.num_substeps = cfg.get("num_substeps", 2)
+        
         # Only print essential info when not debugging
         if self._debug:
             print(f"[rank {_rank()}][PinballEnv] __init__ start (use_hrssa={self._use_hrssa})", flush=True)
@@ -56,7 +59,7 @@ class PinballEnv(gym.Env):
                 "dt": cfg.get("dt", 1e-2),
             },
             "actuation_config": {
-                "num_substeps": cfg.get("num_substeps", 2),
+                "num_substeps": self.num_substeps,
             },
         }
 
@@ -65,24 +68,24 @@ class PinballEnv(gym.Env):
         # --- Buffer / spectral embedding (only if HR-SSA mode) ---
         self.n_probes   = cfg.get("n_probes", 6)
         self.buffer_len = cfg.get("buffer_len", 50)
-        self.embed_dim  = cfg.get("embed_dim", 16)  # Add default value
-        
-        # Fix zero or negative embed_dim
-        if self.embed_dim <= 0:
-            print(f"[rank {_rank()}][PinballEnv] Warning: embed_dim={self.embed_dim} is invalid, setting to 16")
-            self.embed_dim = 16
+        self.embed_dim  = cfg.get("embed_dim", 16)
         
         if self._use_hrssa:
-            # Use cfg instead of config
+            # Fix zero or negative embed_dim ONLY if using HR-SSA
+            if self.embed_dim <= 0:
+                print(f"[rank {_rank()}][PinballEnv] Warning: embed_dim={self.embed_dim} is invalid, setting to 16")
+                self.embed_dim = 16
+            
             self._buf = RegimeObsBuffer(
                 n_probes=self.n_probes,
                 buffer_len=self.buffer_len,
                 embed_dim=self.embed_dim,
-                use_encoder=cfg.get("use_regime_encoder", True)  # Fixed: cfg instead of config
+                use_encoder=cfg.get("use_regime_encoder", True)
             )
             obs_dim = self.n_probes + self.embed_dim
         else:
             self._buf = None
+            self.embed_dim = 0  # Explicitly set to 0 for flat mode
             obs_dim = self.n_probes
 
         # --- Spaces ---
@@ -102,6 +105,7 @@ class PinballEnv(gym.Env):
 
         self._warmup_steps      = cfg.get("warmup_steps", 200)
         self._normalizer_fitted = False
+        self._post_warmup_done  = False  # Track if we've done post-normalizer warmup
 
         # --- Episode termination ---
         self._max_episode_steps = 200
@@ -127,7 +131,7 @@ class PinballEnv(gym.Env):
             return np.concatenate([raw_obs, embed])
         else:
             normed = (raw_obs - self.obs_mean) / (self.obs_std + 1e-8)
-            return normed
+            return normed.astype(np.float32)
 
     def _fit_normalizer(self):
         if self._debug:
@@ -164,19 +168,36 @@ class PinballEnv(gym.Env):
     def reset(self):
         if not self._normalizer_fitted:
             self._fit_normalizer()
+            # After fitting normalizer, reset to get a clean state
+            raw = self._env.reset()
+        else:
+            raw = self._env.reset()
+
+        # Additional warmup: run for a few shedding cycles without recording
+        # to let transients die out. Only do this ONCE after normalizer fitting.
+        if not self._post_warmup_done:
+            print(f"[rank {_rank()}][PinballEnv] Post-normalizer warmup (discarding transients)...", flush=True)
+            for i in range(50):  # ~5 shedding cycles
+                action = np.zeros(3)  # Zero action
+                raw, _, _, _ = self._env.step(action)
+            self._post_warmup_done = True
+            print(f"[rank {_rank()}][PinballEnv] Post-warmup complete", flush=True)
 
         if self._use_hrssa and self._buf is not None:
             self._buf.reset()
-            
-        raw = self._env.reset()
-        obs = self._make_obs(self._raw_to_array(raw))
 
+        obs = self._make_obs(self._raw_to_array(raw))
         self._step_count = 0
         return obs
 
     def step(self, action):
         action = np.asarray(action, dtype=np.float32)
         raw_obs, reward, done, info = self._env.step(action)
+        
+        # Optional: Scale reward if FlowEnv returns time-averaged instead of cumulative
+        # Uncomment the line below if you want cumulative reward over the control interval
+        # reward = reward * self.num_substeps
+        
         obs = self._make_obs(self._raw_to_array(raw_obs))
 
         self._step_count += 1
