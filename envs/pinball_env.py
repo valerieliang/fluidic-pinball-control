@@ -49,6 +49,7 @@ class PinballEnv(gym.Env):
             "flow_config": {
                 "mesh": cfg.get("mesh", "medium"),
                 "Re":   cfg.get("Re", 100),
+                "reward_omega": cfg.get("reward_omega", 1.0),
             },
             "solver": hgym.SemiImplicitBDF,
             "solver_config": {
@@ -72,7 +73,7 @@ class PinballEnv(gym.Env):
             self.embed_dim = 16
         
         if self._use_hrssa:
-            # FIXED: Use cfg instead of config
+            # Use cfg instead of config
             self._buf = RegimeObsBuffer(
                 n_probes=self.n_probes,
                 buffer_len=self.buffer_len,
@@ -125,7 +126,8 @@ class PinballEnv(gym.Env):
             embed = self._buf.embed().detach().cpu().numpy()
             return np.concatenate([raw_obs, embed])
         else:
-            return raw_obs
+            normed = (raw_obs - self.obs_mean) / (self.obs_std + 1e-8)
+            return normed
 
     def _fit_normalizer(self):
         if self._debug:
