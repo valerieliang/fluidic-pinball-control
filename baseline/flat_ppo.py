@@ -441,76 +441,74 @@ class FlatPPOTrainer:
         
         return 0.0
 
-    def train(self, resume_from: Optional[str] = None):
-        """Main training loop."""
-        rank = self._mpi_rank()
-        is_root = rank == 0
-        rank_str = f"[FlatPPO rank {rank}]"
+def train(self, resume_from: Optional[str] = None):
+    """Main training loop."""
+    rank = self._mpi_rank()
+    is_root = rank == 0
+    rank_str = f"[FlatPPO rank {rank}]"
+    
+    print(f"{rank_str} [TRAIN] Starting training", flush=True)
+    
+    if resume_from and is_root:
+        self.load(resume_from)
         
-        print(f"{rank_str} [TRAIN] Starting training", flush=True)
-        
-        if resume_from and is_root:
-            self.load(resume_from)
-            
-        print(f"{rank_str} [TRAIN] Initial reset...", flush=True)
-        obs = self.env.reset()
-        print(f"{rank_str} [TRAIN] Initial reset complete", flush=True)
-        
-        try:
-            from mpi4py import MPI
-            comm = MPI.COMM_WORLD
+    print(f"{rank_str} [TRAIN] Initial reset...", flush=True)
+    obs = self.env.reset()
+    print(f"{rank_str} [TRAIN] Initial reset complete", flush=True)
+    
+    try:
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+        comm.Barrier()
+    except ImportError:
+        comm = None
+    
+    t0 = time.time()
+    
+    rollout_count = 0
+    while True:
+        # Synchronize at start of each rollout
+        if comm is not None:
             comm.Barrier()
-        except ImportError:
-            comm = None
-        
-        t0 = time.time()
-        
-        rollout_count = 0
-        while True:
-            # Synchronize at start of each rollout
-            if comm is not None:
-                comm.Barrier()
-                
-            keep_going = np.array([self.global_step < self.cfg.total_timesteps], dtype=np.int32)
-            if comm is not None:
-                comm.Bcast(keep_going, root=0)
-            if not keep_going[0]:
-                break
-
-            if is_root and rollout_count % 5 == 0:
-                print(f"{rank_str} [TRAIN] Rollout {rollout_count} starting, step={self.global_step}/{self.cfg.total_timesteps}", flush=True)
-        
-            obs, ep_rewards_list = self.collect_rollout(obs)
-            mean_loss = self.update()
             
-            rollout_count += 1
+        keep_going = np.array([self.global_step < self.cfg.total_timesteps], dtype=np.int32)
+        if comm is not None:
+            comm.Bcast(keep_going, root=0)
+        if not keep_going[0]:
+            print(f"{rank_str} [TRAIN] Stopping condition reached", flush=True)
+            break
 
-            # Step the learning rate scheduler once per rollout (only on root)
-            if is_root:
-                self.scheduler.step()
-                current_lr = self.scheduler.get_last_lr()[0]
-            
-            if is_root and ep_rewards_list:
-                ep_r = ep_rewards_list[-1]
-                mean100 = np.mean(self.ep_rewards) if self.ep_rewards else ep_r
-                print(
-                    f"[FlatPPO] ep {self.episode:4d} | step {self.global_step:7d} | "
-                    f"reward={ep_r:8.4f} | mean100={mean100:8.4f} | loss={mean_loss:.4f} | "
-                    f"lr={current_lr:.2e}",
-                    flush=True
-                )
-                
-                if self.episode > 0 and self.episode % self.cfg.save_interval == 0:
-                    self.save()
+        if is_root and rollout_count % 5 == 0:
+            print(f"{rank_str} [TRAIN] Rollout {rollout_count} starting, step={self.global_step}/{self.cfg.total_timesteps}", flush=True)
+    
+        obs, ep_rewards_list = self.collect_rollout(obs)
+        mean_loss = self.update()
+        
+        rollout_count += 1
 
-            if is_root and step_idx % 100 == 0:
-                print(f"[FlatPPO rank {rank}] step {step_idx}: reward={reward:.4f}, ep_reward={ep_reward:.2f}", flush=True)
-                    
+        # Step the learning rate scheduler once per rollout (only on root)
         if is_root:
-            self.save(tag="final")
+            self.scheduler.step()
+            current_lr = self.scheduler.get_last_lr()[0]
+        
+        if is_root and ep_rewards_list:
+            ep_r = ep_rewards_list[-1]
+            mean100 = np.mean(self.ep_rewards) if self.ep_rewards else ep_r
+            print(
+                f"[FlatPPO] ep {self.episode:4d} | step {self.global_step:7d} | "
+                f"reward={ep_r:8.4f} | mean100={mean100:8.4f} | loss={mean_loss:.4f} | "
+                f"lr={current_lr:.2e}",
+                flush=True
+            )
             
-        print(f"[FlatPPO rank {rank}] Training complete in {time.time() - t0:.1f}s", flush=True)
-        self.env.close()
+            if self.episode > 0 and self.episode % self.cfg.save_interval == 0:
+                self.save()
+                
+    if is_root:
+        self.save(tag="final")
+        
+    print(f"[FlatPPO rank {rank}] Training complete in {time.time() - t0:.1f}s", flush=True)
+    self.env.close()
 
     def save(self, tag: str = None):
         """Save model checkpoint."""
