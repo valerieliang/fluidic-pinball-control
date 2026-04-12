@@ -1,31 +1,14 @@
-# baseline/config_flat.yaml
-# Flat PPO baseline configuration
-
-run_name: flat_ppo_re100_2d
-
-# Environment
+# baseline/config_flat.yaml - Adjusted for Re=100 pinball
 Re: 100
-mesh: medium
-dt: 1.0e-2
-num_substeps: 170
+mesh: "medium"
+dt: 1e-2
+num_substeps: 170  # Matches paper: 170 CFD steps per action at Re=100
 n_probes: 6
-warmup_steps: 200
+warmup_steps: 500  # Increased for better normalization
 reward_omega: 1.0
 
-# Mode toggle (baseline PPO)
-use_hrssa: false
-debug: false
-
-# Regime observation parameters (only used if use_hrssa=true)
-buffer_len: 50
-embed_dim: 16
-use_regime_encoder: false 
-
-# Model
-hidden_dim: 64
-
-# PPO
-total_timesteps: 500000
+# PPO hyperparameters (CleanRL defaults that work well)
+total_timesteps: 500_000 
 n_steps: 2048
 n_epochs: 10
 batch_size: 64
@@ -33,11 +16,11 @@ gamma: 0.99
 gae_lambda: 0.95
 clip_eps: 0.2
 vf_coef: 0.5
-ent_coef: 0.05
+ent_coef: 0.01
 max_grad_norm: 0.5
-lr: 1.0e-4
+lr: 3e-4
 
 # Logging
 log_interval: 1
-save_interval: 10
-save_dir: checkpoints
+save_interval: 50
+run_name: "flat_ppo_re100"

@@ -9,16 +9,14 @@ import torch.nn as nn
 from torch.distributions import Normal
 
 
+# baseline/flat_policy.py - Updated actor head
+
 class FlatActorCritic(nn.Module):
-    """
-    Single feedforward network with separate actor and critic heads.
-    
-    Architecture: 2 hidden layers of 64 neurons with ReLU activation,
-    as commonly used in the HydroGym paper baselines.
-    """
-    
     def __init__(self, obs_dim: int, action_dim: int, hidden_dim: int = 64):
         super().__init__()
+        
+        self.action_dim = action_dim
+        self.action_scale = 1.0  # Actions are in [-1, 1]
         
         # Shared feature extractor
         self.shared = nn.Sequential(
@@ -28,23 +26,21 @@ class FlatActorCritic(nn.Module):
             nn.ReLU(),
         )
         
-        # Actor head: outputs mean of Gaussian policy
+        # Actor head: outputs mean (will be tanh squashed)
         self.actor_mean = nn.Linear(hidden_dim, action_dim)
-        # Learnable log standard deviation
-        self.actor_logstd = nn.Parameter(torch.ones(action_dim) * -1.0)
+        # Learnable log standard deviation for unbounded actions before tanh
+        self.actor_logstd = nn.Parameter(torch.zeros(action_dim))
         
-        # Critic head: outputs state value
+        # Critic head
         self.critic = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 1),
         )
         
-        # Orthogonal initialization (CleanRL style)
         self._init_weights()
 
     def _init_weights(self):
-        """Orthogonal initialization for better training dynamics."""
         import numpy as np
         
         for module in self.modules():
@@ -52,61 +48,44 @@ class FlatActorCritic(nn.Module):
                 nn.init.orthogonal_(module.weight, gain=np.sqrt(2))
                 nn.init.constant_(module.bias, 0.0)
         
-        # Actor mean gets smaller initial weights
+        # Actor mean gets smaller initial weights for stable exploration
         nn.init.orthogonal_(self.actor_mean.weight, gain=0.01)
         nn.init.constant_(self.actor_mean.bias, 0.0)
         
-        # Critic gets standard initialization
-        for layer in self.critic:
-            if isinstance(layer, nn.Linear):
-                nn.init.orthogonal_(layer.weight, gain=1.0)
-                nn.init.constant_(layer.bias, 0.0)
+        # Initialize log std to give reasonable initial exploration
+        nn.init.constant_(self.actor_logstd, -0.5)
         
     def forward(self, obs: torch.Tensor):
-        """
-        Args:
-            obs: (batch, obs_dim) observations
-            
-        Returns:
-            dist: Normal distribution over actions
-            value: (batch, 1) state value estimates
-        """
         features = self.shared(obs)
         
-        # Action distribution
-        mean = self.actor_mean(features)
+        # Unbounded mean
+        mean_unbounded = self.actor_mean(features)
+        # Apply tanh to bound actions to [-1, 1]
+        mean = torch.tanh(mean_unbounded) * self.action_scale
+        
+        # Use unbounded standard deviation for Gaussian policy
         std = self.actor_logstd.exp().expand_as(mean)
         dist = Normal(mean, std)
         
-        # Value estimate
         value = self.critic(features)
         
         return dist, value
     
     def get_action(self, obs: torch.Tensor, deterministic: bool = False):
-        """
-        Sample action from policy.
-        
-        Args:
-            obs: (batch, obs_dim) observations
-            deterministic: if True, return mean instead of sampling
-            
-        Returns:
-            action: (batch, action_dim) sampled actions
-            log_prob: (batch,) log probabilities
-            value: (batch, 1) state values
-        """
         dist, value = self.forward(obs)
         
         if deterministic:
             action = dist.mean
         else:
+            # Sample and then squash (already handled by distribution mean)
             action = dist.sample()
+            # Re-clamp for safety
+            action = torch.clamp(action, -self.action_scale, self.action_scale)
             
         log_prob = dist.log_prob(action).sum(dim=-1)
         
         return action, log_prob, value
-    
+        
     def evaluate(self, obs: torch.Tensor, action: torch.Tensor):
         """
         Evaluate log probability and entropy for given action.

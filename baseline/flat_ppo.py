@@ -97,11 +97,8 @@ class RolloutBuffer:
         self.ptr = 0
         
     def compute_returns_and_advantages(self, last_value, gamma, gae_lambda):
+        """Compute GAE without reward normalization."""
         n = self.ptr
-        
-        # Normalize rewards to zero mean unit variance
-        rewards = self.rewards[:n]
-        norm_rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
         
         advantages = np.zeros(n, dtype=np.float32)
         last_gae = 0.0
@@ -109,18 +106,21 @@ class RolloutBuffer:
         for t in reversed(range(n)):
             if t == n - 1:
                 next_value = last_value
-                next_done = 1.0
+                next_done = 0.0  # Bootstrap value, not terminal
             else:
                 next_value = self.values[t + 1]
-                next_done = 1.0 - self.dones[t + 1]
+                next_done = self.dones[t + 1]
                 
-            delta = norm_rewards[t] + gamma * next_value * next_done - self.values[t]
-            last_gae = delta + gamma * gae_lambda * next_done * last_gae
+            delta = self.rewards[t] + gamma * next_value * (1 - next_done) - self.values[t]
+            last_gae = delta + gamma * gae_lambda * (1 - next_done) * last_gae
             advantages[t] = last_gae
         
         self.advantages = advantages
         self.returns = advantages + self.values[:n]
-        self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
+        
+        # Only normalize advantages, not rewards
+        if n > 1:
+            self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
 
 
 class FlatPPOTrainer:

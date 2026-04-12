@@ -138,8 +138,9 @@ class PinballEnv(gym.Env):
             embed = self._buf.embed().detach().cpu().numpy()
             return np.concatenate([raw_obs, embed])
         else:
-            normed = (raw_obs - self.obs_mean) / (self.obs_std + 1e-8)
-            return normed.astype(np.float32)
+            # FLAT MODE: Return raw observations (no normalization here)
+            # Normalization already applied to raw_obs by environment
+            return raw_obs.astype(np.float32)
 
     def _fit_normalizer(self):
         """Fit observation normalizer - coordinated across all MPI ranks."""
@@ -151,43 +152,38 @@ class PinballEnv(gym.Env):
             
         history = []
         raw = self._env.reset()
-        history.append(self._raw_to_array(raw))
+        raw_array = self._raw_to_array(raw)
+        history.append(raw_array)
 
         for i in range(self._warmup_steps):
-            # All ranks need to use the SAME action for collectives
             if rank == 0:
                 action = self._env.action_space.sample()
             else:
                 action = None
             
-            # Broadcast action from rank 0 to all ranks
             if comm is not None:
                 action = comm.bcast(action, root=0)
             
             raw, _, done, _ = self._env.step(action)
-            
-            if rank == 0:
-                history.append(self._raw_to_array(raw))
+            raw_array = self._raw_to_array(raw)
+            history.append(raw_array)
             
             if done:
                 raw = self._env.reset()
-                if rank == 0:
-                    history.append(self._raw_to_array(raw))
 
         if self._use_hrssa and self._buf is not None:
             if rank == 0:
                 self._buf.update_normalization(np.stack(history, axis=0))
-            # Broadcast normalization stats to all ranks
             if comm is not None:
                 self._buf.obs_mean = comm.bcast(self._buf.obs_mean, root=0)
                 self._buf.obs_std = comm.bcast(self._buf.obs_std, root=0)
         else:
+            # For flat mode: store normalized stats but don't apply in _make_obs
             if rank == 0:
                 stacked = np.stack(history, axis=0)
                 self._obs_mean = stacked.mean(axis=0)
                 self._obs_std = stacked.std(axis=0).clip(1e-6)
             
-            # Broadcast normalization stats to all ranks
             if comm is not None:
                 if rank == 0:
                     stats = np.array([*self._obs_mean, *self._obs_std])
@@ -197,11 +193,8 @@ class PinballEnv(gym.Env):
                 if rank != 0:
                     self._obs_mean = stats[:self.n_probes]
                     self._obs_std = stats[self.n_probes:]
-            
-        self._normalizer_fitted = True
         
-        if self._debug:
-            print(f"[rank {rank}][PinballEnv] warmup done", flush=True)
+        self._normalizer_fitted = True
 
     # ------------------------------------------------------------------
     # Gym API
