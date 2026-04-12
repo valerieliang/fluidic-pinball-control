@@ -16,6 +16,14 @@ def _rank() -> int:
         return 0
 
 
+def _mpi_comm():
+    try:
+        from mpi4py import MPI
+        return MPI.COMM_WORLD
+    except ImportError:
+        return None
+
+
 class PinballEnv(gym.Env):
     """
     Gym-compatible wrapper around HydroGym's FlowEnv for the fluidic pinball.
@@ -134,38 +142,75 @@ class PinballEnv(gym.Env):
             return normed.astype(np.float32)
 
     def _fit_normalizer(self):
+        """Fit observation normalizer - coordinated across all MPI ranks."""
+        comm = _mpi_comm()
+        rank = _rank()
+        
         if self._debug:
-            print(f"[rank {_rank()}][PinballEnv] warmup start ({self._warmup_steps} steps)", flush=True)
+            print(f"[rank {rank}][PinballEnv] warmup start ({self._warmup_steps} steps)", flush=True)
             
         history = []
         raw = self._env.reset()
         history.append(self._raw_to_array(raw))
 
         for i in range(self._warmup_steps):
-            action = self._env.action_space.sample()
+            # All ranks need to use the SAME action for collectives
+            if rank == 0:
+                action = self._env.action_space.sample()
+            else:
+                action = None
+            
+            # Broadcast action from rank 0 to all ranks
+            if comm is not None:
+                action = comm.bcast(action, root=0)
+            
             raw, _, done, _ = self._env.step(action)
-            history.append(self._raw_to_array(raw))
+            
+            if rank == 0:
+                history.append(self._raw_to_array(raw))
+            
             if done:
                 raw = self._env.reset()
-                history.append(self._raw_to_array(raw))
+                if rank == 0:
+                    history.append(self._raw_to_array(raw))
 
         if self._use_hrssa and self._buf is not None:
-            self._buf.update_normalization(np.stack(history, axis=0))
+            if rank == 0:
+                self._buf.update_normalization(np.stack(history, axis=0))
+            # Broadcast normalization stats to all ranks
+            if comm is not None:
+                self._buf.obs_mean = comm.bcast(self._buf.obs_mean, root=0)
+                self._buf.obs_std = comm.bcast(self._buf.obs_std, root=0)
         else:
-            stacked = np.stack(history, axis=0)
-            self._obs_mean = stacked.mean(axis=0)
-            self._obs_std = stacked.std(axis=0).clip(1e-6)
+            if rank == 0:
+                stacked = np.stack(history, axis=0)
+                self._obs_mean = stacked.mean(axis=0)
+                self._obs_std = stacked.std(axis=0).clip(1e-6)
+            
+            # Broadcast normalization stats to all ranks
+            if comm is not None:
+                if rank == 0:
+                    stats = np.array([*self._obs_mean, *self._obs_std])
+                else:
+                    stats = np.zeros(2 * self.n_probes)
+                stats = comm.bcast(stats, root=0)
+                if rank != 0:
+                    self._obs_mean = stats[:self.n_probes]
+                    self._obs_std = stats[self.n_probes:]
             
         self._normalizer_fitted = True
         
         if self._debug:
-            print(f"[rank {_rank()}][PinballEnv] warmup done", flush=True)
+            print(f"[rank {rank}][PinballEnv] warmup done", flush=True)
 
     # ------------------------------------------------------------------
     # Gym API
     # ------------------------------------------------------------------
 
     def reset(self):
+        comm = _mpi_comm()
+        rank = _rank()
+        
         if not self._normalizer_fitted:
             self._fit_normalizer()
             # After fitting normalizer, reset to get a clean state
@@ -175,17 +220,33 @@ class PinballEnv(gym.Env):
 
         # Additional warmup: run for a few shedding cycles without recording
         # to let transients die out. Only do this ONCE after normalizer fitting.
+        # Must be coordinated across all ranks!
         if not self._post_warmup_done:
-            print(f"[rank {_rank()}][PinballEnv] Post-normalizer warmup (discarding transients)...", flush=True)
+            if rank == 0:
+                print(f"[rank {rank}][PinballEnv] Post-normalizer warmup (discarding transients)...", flush=True)
+            
+            # All ranks participate in the warmup steps
             for i in range(50):  # ~5 shedding cycles
-                action = np.zeros(3)  # Zero action
+                if rank == 0:
+                    action = np.zeros(3)
+                else:
+                    action = None
+                
+                # Broadcast action
+                if comm is not None:
+                    action = comm.bcast(action, root=0)
+                
                 raw, _, _, _ = self._env.step(action)
+            
             self._post_warmup_done = True
-            print(f"[rank {_rank()}][PinballEnv] Post-warmup complete", flush=True)
+            
+            if rank == 0:
+                print(f"[rank {rank}][PinballEnv] Post-warmup complete", flush=True)
 
         if self._use_hrssa and self._buf is not None:
             self._buf.reset()
 
+        # Get final observation
         obs = self._make_obs(self._raw_to_array(raw))
         self._step_count = 0
         return obs
