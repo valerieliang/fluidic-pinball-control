@@ -195,83 +195,83 @@ class FlatPPOTrainer:
             return 0
             
     def collect_rollout(self, obs: np.ndarray):
-    """Collect n_steps of experience."""
-    rank = self._mpi_rank()
-    is_root = rank == 0
-    
-    try:
-        from mpi4py import MPI
-        comm = MPI.COMM_WORLD
-    except ImportError:
-        comm = None
-    
-    if is_root:
-        self.buffer.reset()
+        """Collect n_steps of experience."""
+        rank = self._mpi_rank()
+        is_root = rank == 0
         
-    ep_reward = 0.0
-    ep_rewards_list = []
-    _zero_action = np.zeros(3, dtype=np.float32)
-    
-    for _ in range(self.cfg.n_steps):
+        try:
+            from mpi4py import MPI
+            comm = MPI.COMM_WORLD
+        except ImportError:
+            comm = None
+        
         if is_root:
-            # Use only raw probes (first cfg.n_probes elements)
+            self.buffer.reset()
+            
+        ep_reward = 0.0
+        ep_rewards_list = []
+        _zero_action = np.zeros(3, dtype=np.float32)
+        
+        for _ in range(self.cfg.n_steps):
+            if is_root:
+                # Use only raw probes (first cfg.n_probes elements)
+                obs_raw = obs[:self.cfg.n_probes]
+                obs_t = torch.as_tensor(obs_raw, dtype=torch.float32, device=self.device).unsqueeze(0)
+                
+                with torch.no_grad():
+                    action, log_prob, value = self.policy.get_action(obs_t)
+                    
+                action_np = action.squeeze(0).cpu().numpy()
+                action_np = np.clip(action_np, -1.0, 1.0)  # Clip to valid range
+                
+                next_obs, reward, done, info = self.env.step(action_np)
+                ep_reward += reward
+                
+                self.buffer.add(
+                    obs=obs_raw,
+                    action=action_np,
+                    log_prob=log_prob.item(),
+                    reward=reward,
+                    done=float(done),
+                    value=value.item(),
+                )
+                
+                self.global_step += 1
+                obs = next_obs
+                
+                if done:
+                    self.episode += 1
+                    ep_rewards_list.append(ep_reward)
+                    self.ep_rewards.append(ep_reward)
+                    ep_reward = 0.0
+                    obs = self.env.reset()
+            else:
+                # Non-root: just step environment for MPI collectives
+                _, _, done, _ = self.env.step(_zero_action)
+            
+            # BROADCAST DONE FLAG TO ALL RANKS (Critical for synchronization)
+            if comm is not None:
+                done_flag = np.array([done], dtype=np.bool_)
+                comm.Bcast(done_flag, root=0)
+                done = done_flag[0]
+            
+            # ALL ranks reset together if done
+            if done and not is_root:
+                self.env.reset()
+                    
+        # Bootstrap value at end of rollout
+        if is_root:
             obs_raw = obs[:self.cfg.n_probes]
             obs_t = torch.as_tensor(obs_raw, dtype=torch.float32, device=self.device).unsqueeze(0)
-            
             with torch.no_grad():
-                action, log_prob, value = self.policy.get_action(obs_t)
-                
-            action_np = action.squeeze(0).cpu().numpy()
-            action_np = np.clip(action_np, -1.0, 1.0)  # Clip to valid range
-            
-            next_obs, reward, done, info = self.env.step(action_np)
-            ep_reward += reward
-            
-            self.buffer.add(
-                obs=obs_raw,
-                action=action_np,
-                log_prob=log_prob.item(),
-                reward=reward,
-                done=float(done),
-                value=value.item(),
+                _, _, last_value = self.policy.get_action(obs_t)
+            self.buffer.compute_returns_and_advantages(
+                last_value=last_value.item(),
+                gamma=self.cfg.gamma,
+                gae_lambda=self.cfg.gae_lambda,
             )
             
-            self.global_step += 1
-            obs = next_obs
-            
-            if done:
-                self.episode += 1
-                ep_rewards_list.append(ep_reward)
-                self.ep_rewards.append(ep_reward)
-                ep_reward = 0.0
-                obs = self.env.reset()
-        else:
-            # Non-root: just step environment for MPI collectives
-            _, _, done, _ = self.env.step(_zero_action)
-        
-        # BROADCAST DONE FLAG TO ALL RANKS (Critical for synchronization)
-        if comm is not None:
-            done_flag = np.array([done], dtype=np.bool_)
-            comm.Bcast(done_flag, root=0)
-            done = done_flag[0]
-        
-        # ALL ranks reset together if done
-        if done and not is_root:
-            self.env.reset()
-                
-    # Bootstrap value at end of rollout
-    if is_root:
-        obs_raw = obs[:self.cfg.n_probes]
-        obs_t = torch.as_tensor(obs_raw, dtype=torch.float32, device=self.device).unsqueeze(0)
-        with torch.no_grad():
-            _, _, last_value = self.policy.get_action(obs_t)
-        self.buffer.compute_returns_and_advantages(
-            last_value=last_value.item(),
-            gamma=self.cfg.gamma,
-            gae_lambda=self.cfg.gae_lambda,
-        )
-        
-    return obs, ep_rewards_list
+        return obs, ep_rewards_list
     
     def update(self) -> float:
         """Perform PPO update on collected rollout using CleanRL-style best practices."""
