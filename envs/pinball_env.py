@@ -194,10 +194,6 @@ class PinballEnv(gym.Env):
         action = np.asarray(action, dtype=np.float32)
         raw_obs, reward, done, info = self._env.step(action)
         
-        # Optional: Scale reward if FlowEnv returns time-averaged instead of cumulative
-        # Uncomment the line below if you want cumulative reward over the control interval
-        # reward = reward * self.num_substeps
-        
         obs = self._make_obs(self._raw_to_array(raw_obs))
 
         self._step_count += 1

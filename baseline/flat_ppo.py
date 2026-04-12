@@ -96,28 +96,30 @@ class RolloutBuffer:
     def reset(self):
         self.ptr = 0
         
-    def compute_returns_and_advantages(self, last_value: float, gamma: float, gae_lambda: float):
-        """Compute GAE advantages and returns."""
+    def compute_returns_and_advantages(self, last_value, gamma, gae_lambda):
         n = self.ptr
+        
+        # Normalize rewards to zero mean unit variance
+        rewards = self.rewards[:n]
+        norm_rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+        
         advantages = np.zeros(n, dtype=np.float32)
         last_gae = 0.0
         
         for t in reversed(range(n)):
             if t == n - 1:
                 next_value = last_value
-                next_done = 1.0  # Terminal state after rollout
+                next_done = 1.0
             else:
                 next_value = self.values[t + 1]
                 next_done = 1.0 - self.dones[t + 1]
                 
-            delta = self.rewards[t] + gamma * next_value * next_done - self.values[t]
+            delta = norm_rewards[t] + gamma * next_value * next_done - self.values[t]
             last_gae = delta + gamma * gae_lambda * next_done * last_gae
             advantages[t] = last_gae
-            
+        
         self.advantages = advantages
         self.returns = advantages + self.values[:n]
-        
-        # Normalize advantages
         self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
 
 
@@ -156,6 +158,19 @@ class FlatPPOTrainer:
         ).to(self.device)
         
         self.optimizer = optim.Adam(self.policy.parameters(), lr=cfg.lr)
+
+        # Calculate total number of PPO updates
+        # Each rollout produces n_steps of data, and we do n_epochs passes over it
+        # Number of rollouts = total_timesteps / n_steps
+        n_rollouts = cfg.total_timesteps // cfg.n_steps
+
+        # Create learning rate scheduler - decays over the course of training
+        self.scheduler = optim.lr_scheduler.LinearLR(
+            self.optimizer,
+            start_factor=1.0,
+            end_factor=0.1,
+            total_iters=n_rollouts
+        )
         
         # Create buffer
         self.buffer = RolloutBuffer(
@@ -180,71 +195,86 @@ class FlatPPOTrainer:
             return 0
             
     def collect_rollout(self, obs: np.ndarray):
-        """Collect n_steps of experience."""
-        rank = self._mpi_rank()
-        is_root = rank == 0
+    """Collect n_steps of experience."""
+    rank = self._mpi_rank()
+    is_root = rank == 0
+    
+    try:
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+    except ImportError:
+        comm = None
+    
+    if is_root:
+        self.buffer.reset()
         
+    ep_reward = 0.0
+    ep_rewards_list = []
+    _zero_action = np.zeros(3, dtype=np.float32)
+    
+    for _ in range(self.cfg.n_steps):
         if is_root:
-            self.buffer.reset()
-            
-        ep_reward = 0.0
-        ep_rewards_list = []
-        _zero_action = np.zeros(3, dtype=np.float32)
-        
-        for _ in range(self.cfg.n_steps):
-            if is_root:
-                # Use only raw probes (first cfg.n_probes elements)
-                obs_raw = obs[:self.cfg.n_probes]
-                obs_t = torch.as_tensor(obs_raw, dtype=torch.float32, device=self.device).unsqueeze(0)
-                
-                with torch.no_grad():
-                    action, log_prob, value = self.policy.get_action(obs_t)
-                    
-                action_np = action.squeeze(0).cpu().numpy()
-                
-                next_obs, reward, done, info = self.env.step(action_np)
-                ep_reward += reward
-                
-                self.buffer.add(
-                    obs=obs_raw,
-                    action=action_np,
-                    log_prob=log_prob.item(),
-                    reward=reward,
-                    done=float(done),
-                    value=value.item(),
-                )
-                
-                self.global_step += 1
-                obs = next_obs
-                
-                if done:
-                    self.episode += 1
-                    ep_rewards_list.append(ep_reward)
-                    self.ep_rewards.append(ep_reward)
-                    ep_reward = 0.0
-                    obs = self.env.reset()
-            else:
-                # Non-root: just step environment for MPI collectives
-                _, _, done, _ = self.env.step(_zero_action)
-                if done:
-                    self.env.reset()
-                    
-        # Bootstrap value at end of rollout
-        if is_root:
+            # Use only raw probes (first cfg.n_probes elements)
             obs_raw = obs[:self.cfg.n_probes]
             obs_t = torch.as_tensor(obs_raw, dtype=torch.float32, device=self.device).unsqueeze(0)
+            
             with torch.no_grad():
-                _, _, last_value = self.policy.get_action(obs_t)
-            self.buffer.compute_returns_and_advantages(
-                last_value=last_value.item(),
-                gamma=self.cfg.gamma,
-                gae_lambda=self.cfg.gae_lambda,
+                action, log_prob, value = self.policy.get_action(obs_t)
+                
+            action_np = action.squeeze(0).cpu().numpy()
+            action_np = np.clip(action_np, -1.0, 1.0)  # Clip to valid range
+            
+            next_obs, reward, done, info = self.env.step(action_np)
+            ep_reward += reward
+            
+            self.buffer.add(
+                obs=obs_raw,
+                action=action_np,
+                log_prob=log_prob.item(),
+                reward=reward,
+                done=float(done),
+                value=value.item(),
             )
             
-        return obs, ep_rewards_list
+            self.global_step += 1
+            obs = next_obs
+            
+            if done:
+                self.episode += 1
+                ep_rewards_list.append(ep_reward)
+                self.ep_rewards.append(ep_reward)
+                ep_reward = 0.0
+                obs = self.env.reset()
+        else:
+            # Non-root: just step environment for MPI collectives
+            _, _, done, _ = self.env.step(_zero_action)
+        
+        # BROADCAST DONE FLAG TO ALL RANKS (Critical for synchronization)
+        if comm is not None:
+            done_flag = np.array([done], dtype=np.bool_)
+            comm.Bcast(done_flag, root=0)
+            done = done_flag[0]
+        
+        # ALL ranks reset together if done
+        if done and not is_root:
+            self.env.reset()
+                
+    # Bootstrap value at end of rollout
+    if is_root:
+        obs_raw = obs[:self.cfg.n_probes]
+        obs_t = torch.as_tensor(obs_raw, dtype=torch.float32, device=self.device).unsqueeze(0)
+        with torch.no_grad():
+            _, _, last_value = self.policy.get_action(obs_t)
+        self.buffer.compute_returns_and_advantages(
+            last_value=last_value.item(),
+            gamma=self.cfg.gamma,
+            gae_lambda=self.cfg.gae_lambda,
+        )
+        
+    return obs, ep_rewards_list
     
     def update(self) -> float:
-        """Perform PPO update on collected rollout."""
+        """Perform PPO update on collected rollout using CleanRL-style best practices."""
         if self._mpi_rank() != 0:
             return 0.0
             
@@ -256,13 +286,24 @@ class FlatPPOTrainer:
         old_log_probs = torch.as_tensor(self.buffer.log_probs[:n], dtype=torch.float32, device=self.device)
         advantages = torch.as_tensor(self.buffer.advantages[:n], dtype=torch.float32, device=self.device)
         returns = torch.as_tensor(self.buffer.returns[:n], dtype=torch.float32, device=self.device)
+        values = torch.as_tensor(self.buffer.values[:n], dtype=torch.float32, device=self.device)
+        
+        # CleanRL: Normalize advantages globally (already done in buffer, but do it again for safety)
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
         indices = np.arange(n)
         total_loss = 0.0
+        total_policy_loss = 0.0
+        total_value_loss = 0.0
+        total_entropy = 0.0
         n_updates = 0
         
-        for _ in range(self.cfg.n_epochs):
+        # Store original parameters for early stopping check (optional)
+        # original_params = {name: param.clone() for name, param in self.policy.named_parameters()}
+        
+        for epoch in range(self.cfg.n_epochs):
             np.random.shuffle(indices)
+            
             for start in range(0, n, self.cfg.batch_size):
                 idx = indices[start:start + self.cfg.batch_size]
                 if len(idx) == 0:
@@ -273,39 +314,73 @@ class FlatPPOTrainer:
                 batch_old_log_probs = old_log_probs[idx]
                 batch_advantages = advantages[idx]
                 batch_returns = returns[idx]
+                batch_old_values = values[idx]
                 
                 # Evaluate current policy
-                log_probs, entropy, values = self.policy.evaluate(batch_obs, batch_actions)
-                values = values.squeeze(-1)
+                log_probs, entropy, new_values = self.policy.evaluate(batch_obs, batch_actions)
+                new_values = new_values.squeeze(-1)
+                
+                # CleanRL: Normalize advantages per-minibatch for stability
+                batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std() + 1e-8)
                 
                 # PPO clipped objective
                 ratio = (log_probs - batch_old_log_probs).exp()
                 surr1 = ratio * batch_advantages
-                surr2 = ratio.clamp(1 - self.cfg.clip_eps, 1 + self.cfg.clip_eps) * batch_advantages
+                surr2 = torch.clamp(ratio, 1 - self.cfg.clip_eps, 1 + self.cfg.clip_eps) * batch_advantages
                 policy_loss = -torch.min(surr1, surr2).mean()
                 
-                # Value loss
-                value_loss = nn.functional.mse_loss(values, batch_returns)
+                # CleanRL-style value loss with clipping
+                # Clip the value update to prevent large value function changes
+                value_pred_clipped = batch_old_values + torch.clamp(
+                    new_values - batch_old_values,
+                    -self.cfg.clip_eps,
+                    self.cfg.clip_eps
+                )
+                value_loss_unclipped = (new_values - batch_returns) ** 2
+                value_loss_clipped = (value_pred_clipped - batch_returns) ** 2
+                value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
                 
-                # Entropy bonus
+                # Entropy bonus (maximize entropy = minimize negative entropy)
                 entropy_loss = -entropy.mean()
                 
-                # Total loss
-                loss = (
-                    policy_loss
-                    + self.cfg.vf_coef * value_loss
-                    + self.cfg.ent_coef * entropy_loss
-                )
+                # Total loss (CleanRL formulation)
+                loss = policy_loss + self.cfg.vf_coef * value_loss + self.cfg.ent_coef * entropy_loss
                 
                 self.optimizer.zero_grad()
                 loss.backward()
+                
+                # Global gradient clipping
                 nn.utils.clip_grad_norm_(self.policy.parameters(), self.cfg.max_grad_norm)
+                
                 self.optimizer.step()
                 
                 total_loss += loss.item()
+                total_policy_loss += policy_loss.item()
+                total_value_loss += value_loss.item()
+                total_entropy += -entropy_loss.item()  # Store positive entropy
                 n_updates += 1
-                
-        return total_loss / max(n_updates, 1)
+        
+        # Calculate approximate KL divergence for monitoring
+        with torch.no_grad():
+            log_probs, _, _ = self.policy.evaluate(obs, actions)
+            approx_kl = ((log_probs - old_log_probs) ** 2).mean().item()
+        
+        # Log detailed metrics (optional, you can add these to the print statement)
+        if n_updates > 0:
+            avg_policy_loss = total_policy_loss / n_updates
+            avg_value_loss = total_value_loss / n_updates
+            avg_entropy = total_entropy / n_updates
+            avg_loss = total_loss / n_updates
+            
+            # You can store these for logging in train()
+            self.last_policy_loss = avg_policy_loss
+            self.last_value_loss = avg_value_loss
+            self.last_entropy = avg_entropy
+            self.last_approx_kl = approx_kl
+            
+            return avg_loss
+        
+        return 0.0
     
     def train(self, resume_from: Optional[str] = None):
         """Main training loop."""
@@ -333,13 +408,19 @@ class FlatPPOTrainer:
                 
             obs, ep_rewards_list = self.collect_rollout(obs)
             mean_loss = self.update()
+
+            # Step the learning rate scheduler once per rollout (only on root)
+            if is_root:
+                self.scheduler.step()
+                current_lr = self.scheduler.get_last_lr()[0]
             
             if is_root and ep_rewards_list:
                 ep_r = ep_rewards_list[-1]
                 mean100 = np.mean(self.ep_rewards) if self.ep_rewards else ep_r
                 print(
                     f"[FlatPPO] ep {self.episode:4d} | step {self.global_step:7d} | "
-                    f"reward={ep_r:8.4f} | mean100={mean100:8.4f} | loss={mean_loss:.4f}",
+                    f"reward={ep_r:8.4f} | mean100={mean100:8.4f} | loss={mean_loss:.4f} | "
+                    f"lr={current_lr:.2e}",
                     flush=True
                 )
                 
