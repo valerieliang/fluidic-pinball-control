@@ -13,7 +13,7 @@ class FlatActorCritic(nn.Module):
     """
     Single feedforward network with separate actor and critic heads.
     
-    Architecture: 2 hidden layers of 64 neurons with Tanh activation,
+    Architecture: 2 hidden layers of 64 neurons with ReLu activation,
     as commonly used in the HydroGym paper baselines.
     """
     
@@ -23,9 +23,9 @@ class FlatActorCritic(nn.Module):
         # Shared feature extractor
         self.shared = nn.Sequential(
             nn.Linear(obs_dim, hidden_dim),
-            nn.Tanh(),
+            nn.ReLu(),
             nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh(),
+            nn.ReLu(),
         )
         
         # Actor head: outputs mean of Gaussian policy
@@ -36,7 +36,7 @@ class FlatActorCritic(nn.Module):
         # Critic head: outputs state value
         self.critic = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh(),
+            nn.ReLu(),
             nn.Linear(hidden_dim, 1),
         )
         
