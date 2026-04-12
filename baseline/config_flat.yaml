@@ -1,14 +1,14 @@
-# baseline/config_flat.yaml - Adjusted for Re=100 pinball
+# baseline/config_flat.yaml
 Re: 100
 mesh: "medium"
-dt: 1e-2
-num_substeps: 170  # Matches paper: 170 CFD steps per action at Re=100
+dt: 0.01 
+num_substeps: 170
 n_probes: 6
-warmup_steps: 500  # Increased for better normalization
+warmup_steps: 500
 reward_omega: 1.0
 
-# PPO hyperparameters (CleanRL defaults that work well)
-total_timesteps: 500_000 
+# PPO hyperparameters 
+total_timesteps: 500000
 n_steps: 2048
 n_epochs: 10
 batch_size: 64
@@ -18,7 +18,7 @@ clip_eps: 0.2
 vf_coef: 0.5
 ent_coef: 0.01
 max_grad_norm: 0.5
-lr: 3e-4
+lr: 0.0003  
 
 # Logging
 log_interval: 1
