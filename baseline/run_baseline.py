@@ -9,6 +9,10 @@ warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import sys
+if not sys.warnoptions:
+    import warnings
+    warnings.simplefilter("ignore")
+
 import os
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
