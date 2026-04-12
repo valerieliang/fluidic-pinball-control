@@ -35,7 +35,7 @@ clip_eps: 0.2
 vf_coef: 0.5
 ent_coef: 0.01
 max_grad_norm: 0.5
-lr: 3.0e-4
+lr: 1.0e-4
 
 # Logging
 log_interval: 1
