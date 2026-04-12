@@ -4,6 +4,7 @@ import gym
 from gym import spaces
 import hydrogym.firedrake as hgym
 from hydrogym import FlowEnv
+import time
 
 from envs.regime_obs import RegimeObsBuffer
 
@@ -147,15 +148,25 @@ class PinballEnv(gym.Env):
         comm = _mpi_comm()
         rank = _rank()
         
+        rank_str = f"[rank {rank}]"
+        print(f"{rank_str} [WARMUP] Starting normalizer fitting with {self._warmup_steps} steps", flush=True)
+        start_time = time.time()
+        
         if self._debug:
-            print(f"[rank {rank}][PinballEnv] warmup start ({self._warmup_steps} steps)", flush=True)
+            print(f"{rank_str} [WARMUP] warmup start ({self._warmup_steps} steps)", flush=True)
             
         history = []
         raw = self._env.reset()
         raw_array = self._raw_to_array(raw)
         history.append(raw_array)
+        
+        print(f"{rank_str} [WARMUP] Initial reset complete, starting collection loop", flush=True)
 
         for i in range(self._warmup_steps):
+            # Progress reporting every 50 steps on rank 0
+            if rank == 0 and i % 50 == 0:
+                print(f"{rank_str} [WARMUP] Step {i}/{self._warmup_steps}", flush=True)
+            
             if rank == 0:
                 action = self._env.action_space.sample()
             else:
@@ -169,22 +180,30 @@ class PinballEnv(gym.Env):
             history.append(raw_array)
             
             if done:
+                print(f"{rank_str} [WARMUP] Episode done at step {i}, resetting", flush=True)
                 raw = self._env.reset()
+
+        print(f"{rank_str} [WARMUP] Collection loop complete, collected {len(history)} samples", flush=True)
 
         if self._use_hrssa and self._buf is not None:
             if rank == 0:
+                print(f"{rank_str} [WARMUP] Computing normalization stats for HR-SSA mode", flush=True)
                 self._buf.update_normalization(np.stack(history, axis=0))
             if comm is not None:
+                print(f"{rank_str} [WARMUP] Broadcasting HR-SSA normalization stats", flush=True)
                 self._buf.obs_mean = comm.bcast(self._buf.obs_mean, root=0)
                 self._buf.obs_std = comm.bcast(self._buf.obs_std, root=0)
         else:
             # For flat mode: store normalized stats but don't apply in _make_obs
             if rank == 0:
+                print(f"{rank_str} [WARMUP] Computing normalization stats for FLAT mode", flush=True)
                 stacked = np.stack(history, axis=0)
                 self._obs_mean = stacked.mean(axis=0)
                 self._obs_std = stacked.std(axis=0).clip(1e-6)
+                print(f"{rank_str} [WARMUP] Flat mode stats: mean range [{self._obs_mean.min():.3f}, {self._obs_mean.max():.3f}], std range [{self._obs_std.min():.3f}, {self._obs_std.max():.3f}]", flush=True)
             
             if comm is not None:
+                print(f"{rank_str} [WARMUP] Broadcasting flat mode normalization stats", flush=True)
                 if rank == 0:
                     stats = np.array([*self._obs_mean, *self._obs_std])
                 else:
@@ -195,6 +214,8 @@ class PinballEnv(gym.Env):
                     self._obs_std = stats[self.n_probes:]
         
         self._normalizer_fitted = True
+        elapsed = time.time() - start_time
+        print(f"{rank_str} [WARMUP] Normalizer fitting COMPLETE after {elapsed:.1f}s", flush=True)
 
     # ------------------------------------------------------------------
     # Gym API
@@ -203,23 +224,32 @@ class PinballEnv(gym.Env):
     def reset(self):
         comm = _mpi_comm()
         rank = _rank()
+        rank_str = f"[rank {rank}]"
+        
+        print(f"{rank_str} [RESET] Entering reset (normalizer_fitted={self._normalizer_fitted}, post_warmup_done={self._post_warmup_done})", flush=True)
         
         if not self._normalizer_fitted:
+            print(f"{rank_str} [RESET] Normalizer not fitted, calling _fit_normalizer()", flush=True)
             self._fit_normalizer()
-            # After fitting normalizer, reset to get a clean state
+            print(f"{rank_str} [RESET] After normalizer fitting, resetting env", flush=True)
             raw = self._env.reset()
         else:
+            print(f"{rank_str} [RESET] Normalizer already fitted, resetting env", flush=True)
             raw = self._env.reset()
 
         # Additional warmup: run for a few shedding cycles without recording
         # to let transients die out. Only do this ONCE after normalizer fitting.
         # Must be coordinated across all ranks!
         if not self._post_warmup_done:
+            print(f"{rank_str} [RESET] Starting post-normalizer warmup (discarding transients)...", flush=True)
             if rank == 0:
-                print(f"[rank {rank}][PinballEnv] Post-normalizer warmup (discarding transients)...", flush=True)
+                print(f"{rank_str} [RESET] Post-normalizer warmup - discarding transients for 50 steps", flush=True)
             
             # All ranks participate in the warmup steps
             for i in range(50):  # ~5 shedding cycles
+                if i % 10 == 0 and rank == 0:
+                    print(f"{rank_str} [RESET] Post-warmup step {i}/50", flush=True)
+                    
                 if rank == 0:
                     action = np.zeros(3)
                 else:
@@ -232,16 +262,16 @@ class PinballEnv(gym.Env):
                 raw, _, _, _ = self._env.step(action)
             
             self._post_warmup_done = True
-            
-            if rank == 0:
-                print(f"[rank {rank}][PinballEnv] Post-warmup complete", flush=True)
+            print(f"{rank_str} [RESET] Post-normalizer warmup COMPLETE", flush=True)
 
         if self._use_hrssa and self._buf is not None:
+            print(f"{rank_str} [RESET] Resetting HR-SSA buffer", flush=True)
             self._buf.reset()
 
         # Get final observation
         obs = self._make_obs(self._raw_to_array(raw))
         self._step_count = 0
+        print(f"{rank_str} [RESET] Reset COMPLETE, obs shape={obs.shape}", flush=True)
         return obs
 
     def step(self, action):

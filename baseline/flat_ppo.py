@@ -215,6 +215,7 @@ class FlatPPOTrainer:
         except ImportError:
             return 0
             
+
     def collect_rollout(self, obs: np.ndarray):
         """Collect n_steps of experience."""
         rank = self._mpi_rank()
@@ -227,13 +228,23 @@ class FlatPPOTrainer:
             comm = None
         
         if is_root:
+            print(f"[FlatPPO rank {rank}] [COLLECT] Starting rollout collection (n_steps={self.cfg.n_steps})", flush=True)
             self.buffer.reset()
             
+        # Synchronize before starting
+        if comm is not None:
+            comm.Barrier()
+            if is_root:
+                print(f"[FlatPPO rank {rank}] [COLLECT] All ranks synchronized, starting rollout", flush=True)
+        
         ep_reward = 0.0
         ep_rewards_list = []
         _zero_action = np.zeros(3, dtype=np.float32)
         
-        for _ in range(self.cfg.n_steps):
+        # Flag to track if reset is needed across all ranks
+        need_reset = False
+        
+        for step_idx in range(self.cfg.n_steps):
             if is_root:
                 # Use only raw probes (first cfg.n_probes elements)
                 obs_raw = obs[:self.cfg.n_probes]
@@ -243,7 +254,7 @@ class FlatPPOTrainer:
                     action, log_prob, value = self.policy.get_action(obs_t)
                     
                 action_np = action.squeeze(0).cpu().numpy()
-                action_np = np.clip(action_np, -1.0, 1.0)  # Clip to valid range
+                action_np = np.clip(action_np, -1.0, 1.0)
                 
                 next_obs, reward, done, info = self.env.step(action_np)
                 ep_reward += reward
@@ -264,22 +275,37 @@ class FlatPPOTrainer:
                     self.episode += 1
                     ep_rewards_list.append(ep_reward)
                     self.ep_rewards.append(ep_reward)
+                    print(f"[FlatPPO rank {rank}] [COLLECT] Episode {self.episode} finished, reward={ep_reward:.4f}", flush=True)
                     ep_reward = 0.0
-                    obs = self.env.reset()
+                    need_reset = True  # Signal that reset is needed
             else:
-                # Non-root: just step environment for MPI collectives
+                # Non-root: step environment
                 _, _, done, _ = self.env.step(_zero_action)
+                # Also track done on non-root ranks to know when to reset
+                if done:
+                    need_reset = True
             
-            # BROADCAST DONE FLAG TO ALL RANKS (Critical for synchronization)
+            # BROADCAST need_reset flag to all ranks
             if comm is not None:
-                done_flag = np.array([done], dtype=np.bool_)
-                comm.Bcast(done_flag, root=0)
-                done = done_flag[0]
+                need_reset_arr = np.array([need_reset], dtype=np.int32)
+                comm.Bcast(need_reset_arr, root=0)
+                need_reset = bool(need_reset_arr[0])
             
-            # ALL ranks reset together if done
-            if done and not is_root:
-                self.env.reset()
-                    
+            # ALL ranks reset together if needed
+            if need_reset:
+                print(f"[FlatPPO rank {rank}] [COLLECT] Resetting environment (step {step_idx})", flush=True)
+                if is_root:
+                    obs = self.env.reset()
+                else:
+                    _ = self.env.reset()  # Non-root also must reset!
+                need_reset = False
+                
+                # Synchronize after reset
+                if comm is not None:
+                    comm.Barrier()
+                    if is_root and step_idx % 100 == 0:
+                        print(f"[FlatPPO rank {rank}] [COLLECT] Reset complete, continuing", flush=True)
+        
         # Bootstrap value at end of rollout
         if is_root:
             obs_raw = obs[:self.cfg.n_probes]
@@ -291,9 +317,21 @@ class FlatPPOTrainer:
                 gamma=self.cfg.gamma,
                 gae_lambda=self.cfg.gae_lambda,
             )
-            
+        
+        # Broadcast final obs from root to all ranks? Actually each rank has its own obs
+        # For next rollout, we need all ranks to have consistent state
+        if comm is not None:
+            # Non-root ranks need to get the observation from root for the next rollout
+            if is_root:
+                obs_to_bcast = obs
+            else:
+                obs_to_bcast = np.zeros(self.cfg.n_probes, dtype=np.float32)
+            comm.Bcast(obs_to_bcast, root=0)
+            if not is_root:
+                obs = obs_to_bcast
+        
         return obs, ep_rewards_list
-    
+
     def update(self) -> float:
         """Perform PPO update on collected rollout using CleanRL-style best practices."""
         if self._mpi_rank() != 0:
@@ -402,33 +440,50 @@ class FlatPPOTrainer:
             return avg_loss
         
         return 0.0
-    
+
     def train(self, resume_from: Optional[str] = None):
         """Main training loop."""
         rank = self._mpi_rank()
         is_root = rank == 0
+        rank_str = f"[FlatPPO rank {rank}]"
+        
+        print(f"{rank_str} [TRAIN] Starting training", flush=True)
         
         if resume_from and is_root:
             self.load(resume_from)
             
+        print(f"{rank_str} [TRAIN] Initial reset...", flush=True)
         obs = self.env.reset()
-        t0 = time.time()
+        print(f"{rank_str} [TRAIN] Initial reset complete", flush=True)
         
         try:
             from mpi4py import MPI
             comm = MPI.COMM_WORLD
+            comm.Barrier()
         except ImportError:
             comm = None
-            
+        
+        t0 = time.time()
+        
+        rollout_count = 0
         while True:
-            keep_going = np.array([self.global_step < self.cfg.total_timesteps], dtype=np.bool_)
+            # Synchronize at start of each rollout
+            if comm is not None:
+                comm.Barrier()
+                
+            keep_going = np.array([self.global_step < self.cfg.total_timesteps], dtype=np.int32)
             if comm is not None:
                 comm.Bcast(keep_going, root=0)
             if not keep_going[0]:
                 break
-                
+
+            if is_root and rollout_count % 5 == 0:
+                print(f"{rank_str} [TRAIN] Rollout {rollout_count} starting, step={self.global_step}/{self.cfg.total_timesteps}", flush=True)
+        
             obs, ep_rewards_list = self.collect_rollout(obs)
             mean_loss = self.update()
+            
+            rollout_count += 1
 
             # Step the learning rate scheduler once per rollout (only on root)
             if is_root:
@@ -447,13 +502,16 @@ class FlatPPOTrainer:
                 
                 if self.episode > 0 and self.episode % self.cfg.save_interval == 0:
                     self.save()
+
+            if is_root and step_idx % 100 == 0:
+                print(f"[FlatPPO rank {rank}] step {step_idx}: reward={reward:.4f}, ep_reward={ep_reward:.2f}", flush=True)
                     
         if is_root:
             self.save(tag="final")
             
         print(f"[FlatPPO rank {rank}] Training complete in {time.time() - t0:.1f}s", flush=True)
         self.env.close()
-        
+
     def save(self, tag: str = None):
         """Save model checkpoint."""
         label = tag or f"ep{self.episode:05d}"
