@@ -59,8 +59,29 @@ class FlatPPOConfig:
     
     @classmethod
     def from_yaml(cls, path: str) -> "FlatPPOConfig":
-        with open(path) as f:
+        with open(path, 'r') as f:
             d = yaml.safe_load(f)
+        
+        # Convert numeric types explicitly
+        numeric_fields = [
+            'Re', 'dt', 'num_substeps', 'n_probes', 'warmup_steps', 'reward_omega',
+            'total_timesteps', 'n_steps', 'n_epochs', 'batch_size', 'gamma', 
+            'gae_lambda', 'clip_eps', 'vf_coef', 'ent_coef', 'max_grad_norm', 'lr',
+            'log_interval', 'save_interval', 'hidden_dim'
+        ]
+        
+        for field in numeric_fields:
+            if field in d and isinstance(d[field], str):
+                # Try to convert to float first, then int if needed
+                try:
+                    if '.' in d[field]:
+                        d[field] = float(d[field])
+                    else:
+                        d[field] = int(d[field])
+                except (ValueError, TypeError):
+                    pass
+        
+        # Only keep fields that exist in the dataclass
         valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
         return cls(**valid)
 
