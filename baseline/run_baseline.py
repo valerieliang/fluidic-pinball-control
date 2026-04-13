@@ -47,14 +47,17 @@ def main():
     rank = get_mpi_rank()
     size = get_mpi_size()
     
-    # print(f"[rank {rank}] started (pid={os.getpid()}, {size} total ranks)", flush=True)
-    
     parser = argparse.ArgumentParser(description="Flat PPO Baseline Training")
     parser.add_argument("--config", type=str, default="baseline/config_flat.yaml")
     parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     args = parser.parse_args()
     
     cfg = FlatPPOConfig.from_yaml(args.config)
+    
+    # Override verbose from command line if provided
+    if args.verbose:
+        cfg.verbose = True
     
     if rank == 0:
         print("=" * 60)
@@ -62,6 +65,7 @@ def main():
         print(f"  Re={cfg.Re}  mesh={cfg.mesh}  substeps={cfg.num_substeps}")
         print(f"  total_timesteps={cfg.total_timesteps:,}")
         print(f"  run_name={cfg.run_name}")
+        print(f"  verbose={cfg.verbose}")
         print("=" * 60, flush=True)
     
     trainer = FlatPPOTrainer(cfg)

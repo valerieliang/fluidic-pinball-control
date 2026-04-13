@@ -56,6 +56,7 @@ class FlatPPOConfig:
     save_interval: int = 10
     save_dir: str = "checkpoints"
     run_name: str = "flat_ppo_baseline"
+    verbose: bool = False  # Add verbose flag
     
     @classmethod
     def from_yaml(cls, path: str) -> "FlatPPOConfig":
@@ -80,6 +81,10 @@ class FlatPPOConfig:
                         d[field] = int(d[field])
                 except (ValueError, TypeError):
                     pass
+        
+        # Handle boolean fields
+        if 'verbose' in d and isinstance(d['verbose'], str):
+            d['verbose'] = d['verbose'].lower() == 'true'
         
         # Only keep fields that exist in the dataclass
         valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
@@ -150,7 +155,11 @@ class FlatPPOTrainer:
     def __init__(self, cfg: FlatPPOConfig):
         self.cfg = cfg
         self.device = torch.device("cpu")
-        print(f"[FlatPPO] Device: {self.device}")
+        self.verbose = cfg.verbose
+        
+        rank = self._mpi_rank()
+        if rank == 0:
+            print(f"[FlatPPO] Device: {self.device}")
         
         # Create environment
         self.env = PinballEnv({
@@ -165,6 +174,7 @@ class FlatPPOTrainer:
             "use_hrssa": False,  # Force flat PPO mode
             "use_regime_encoder": False,  # Disable encoder
             "reward_omega": cfg.reward_omega,
+            "verbose": cfg.verbose,  # Pass verbose flag to env
         })
         
         # Override observation to use only raw probes (no embedding)
@@ -181,8 +191,6 @@ class FlatPPOTrainer:
         self.optimizer = optim.Adam(self.policy.parameters(), lr=cfg.lr)
 
         # Calculate total number of PPO updates
-        # Each rollout produces n_steps of data, and we do n_epochs passes over it
-        # Number of rollouts = total_timesteps / n_steps
         n_rollouts = cfg.total_timesteps // cfg.n_steps
 
         # Create learning rate scheduler - decays over the course of training
@@ -227,15 +235,15 @@ class FlatPPOTrainer:
         except ImportError:
             comm = None
         
-        if is_root:
-            print(f"[FlatPPO rank {rank}] [COLLECT] Starting rollout collection (n_steps={self.cfg.n_steps})", flush=True)
+        if is_root and self.verbose:
+            print(f"[COLLECT] Starting rollout collection (n_steps={self.cfg.n_steps})", flush=True)
+            self.buffer.reset()
+        elif is_root:
             self.buffer.reset()
             
         # Synchronize before starting
         if comm is not None:
             comm.Barrier()
-            if is_root:
-                print(f"[FlatPPO rank {rank}] [COLLECT] All ranks synchronized, starting rollout", flush=True)
         
         ep_reward = 0.0
         ep_rewards_list = []
@@ -275,13 +283,13 @@ class FlatPPOTrainer:
                     self.episode += 1
                     ep_rewards_list.append(ep_reward)
                     self.ep_rewards.append(ep_reward)
-                    print(f"[FlatPPO rank {rank}] [COLLECT] Episode {self.episode} finished, reward={ep_reward:.4f}", flush=True)
+                    if self.verbose:
+                        print(f"[COLLECT] Episode {self.episode} finished, reward={ep_reward:.4f}", flush=True)
                     ep_reward = 0.0
-                    need_reset = True  # Signal that reset is needed
+                    need_reset = True
             else:
                 # Non-root: step environment
                 _, _, done, _ = self.env.step(_zero_action)
-                # Also track done on non-root ranks to know when to reset
                 if done:
                     need_reset = True
             
@@ -293,18 +301,17 @@ class FlatPPOTrainer:
             
             # ALL ranks reset together if needed
             if need_reset:
-                print(f"[FlatPPO rank {rank}] [COLLECT] Resetting environment (step {step_idx})", flush=True)
+                if self.verbose:
+                    print(f"[COLLECT] Resetting environment (step {step_idx})", flush=True)
                 if is_root:
                     obs = self.env.reset()
                 else:
-                    _ = self.env.reset()  # Non-root also must reset!
+                    _ = self.env.reset()
                 need_reset = False
                 
                 # Synchronize after reset
                 if comm is not None:
                     comm.Barrier()
-                    if is_root and step_idx % 100 == 0:
-                        print(f"[FlatPPO rank {rank}] [COLLECT] Reset complete, continuing", flush=True)
         
         # Bootstrap value at end of rollout
         if is_root:
@@ -318,10 +325,8 @@ class FlatPPOTrainer:
                 gae_lambda=self.cfg.gae_lambda,
             )
         
-        # Broadcast final obs from root to all ranks? Actually each rank has its own obs
-        # For next rollout, we need all ranks to have consistent state
+        # Broadcast final obs from root to all ranks
         if comm is not None:
-            # Non-root ranks need to get the observation from root for the next rollout
             if is_root:
                 obs_to_bcast = obs
             else:
@@ -347,7 +352,7 @@ class FlatPPOTrainer:
         returns = torch.as_tensor(self.buffer.returns[:n], dtype=torch.float32, device=self.device)
         values = torch.as_tensor(self.buffer.values[:n], dtype=torch.float32, device=self.device)
         
-        # CleanRL: Normalize advantages globally (already done in buffer, but do it again for safety)
+        # CleanRL: Normalize advantages globally
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
         indices = np.arange(n)
@@ -356,9 +361,6 @@ class FlatPPOTrainer:
         total_value_loss = 0.0
         total_entropy = 0.0
         n_updates = 0
-        
-        # Store original parameters for early stopping check (optional)
-        # original_params = {name: param.clone() for name, param in self.policy.named_parameters()}
         
         for epoch in range(self.cfg.n_epochs):
             np.random.shuffle(indices)
@@ -389,7 +391,6 @@ class FlatPPOTrainer:
                 policy_loss = -torch.min(surr1, surr2).mean()
                 
                 # CleanRL-style value loss with clipping
-                # Clip the value update to prevent large value function changes
                 value_pred_clipped = batch_old_values + torch.clamp(
                     new_values - batch_old_values,
                     -self.cfg.clip_eps,
@@ -399,10 +400,10 @@ class FlatPPOTrainer:
                 value_loss_clipped = (value_pred_clipped - batch_returns) ** 2
                 value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
                 
-                # Entropy bonus (maximize entropy = minimize negative entropy)
+                # Entropy bonus
                 entropy_loss = -entropy.mean()
                 
-                # Total loss (CleanRL formulation)
+                # Total loss
                 loss = policy_loss + self.cfg.vf_coef * value_loss + self.cfg.ent_coef * entropy_loss
                 
                 self.optimizer.zero_grad()
@@ -416,7 +417,7 @@ class FlatPPOTrainer:
                 total_loss += loss.item()
                 total_policy_loss += policy_loss.item()
                 total_value_loss += value_loss.item()
-                total_entropy += -entropy_loss.item()  # Store positive entropy
+                total_entropy += -entropy_loss.item()
                 n_updates += 1
         
         # Calculate approximate KL divergence for monitoring
@@ -424,14 +425,12 @@ class FlatPPOTrainer:
             log_probs, _, _ = self.policy.evaluate(obs, actions)
             approx_kl = ((log_probs - old_log_probs) ** 2).mean().item()
         
-        # Log detailed metrics (optional, you can add these to the print statement)
         if n_updates > 0:
             avg_policy_loss = total_policy_loss / n_updates
             avg_value_loss = total_value_loss / n_updates
             avg_entropy = total_entropy / n_updates
             avg_loss = total_loss / n_updates
             
-            # You can store these for logging in train()
             self.last_policy_loss = avg_policy_loss
             self.last_value_loss = avg_value_loss
             self.last_entropy = avg_entropy
@@ -445,16 +444,18 @@ class FlatPPOTrainer:
         """Main training loop."""
         rank = self._mpi_rank()
         is_root = rank == 0
-        rank_str = f"[FlatPPO rank {rank}]"
         
-        print(f"{rank_str} [TRAIN] Starting training", flush=True)
+        if is_root:
+            print(f"[FlatPPO] Starting training", flush=True)
         
         if resume_from and is_root:
             self.load(resume_from)
             
-        print(f"{rank_str} [TRAIN] Initial reset...", flush=True)
+        if self.verbose and is_root:
+            print(f"[TRAIN] Initial reset...", flush=True)
         obs = self.env.reset()
-        print(f"{rank_str} [TRAIN] Initial reset complete", flush=True)
+        if self.verbose and is_root:
+            print(f"[TRAIN] Initial reset complete", flush=True)
         
         try:
             from mpi4py import MPI
@@ -475,11 +476,9 @@ class FlatPPOTrainer:
             if comm is not None:
                 comm.Bcast(keep_going, root=0)
             if not keep_going[0]:
-                print(f"{rank_str} [TRAIN] Stopping condition reached", flush=True)
+                if is_root:
+                    print(f"[FlatPPO] Training complete - reached {self.cfg.total_timesteps} steps", flush=True)
                 break
-
-            if is_root and rollout_count % 5 == 0:
-                print(f"{rank_str} [TRAIN] Rollout {rollout_count} starting, step={self.global_step}/{self.cfg.total_timesteps}", flush=True)
         
             obs, ep_rewards_list = self.collect_rollout(obs)
             mean_loss = self.update()
@@ -495,9 +494,13 @@ class FlatPPOTrainer:
                 ep_r = ep_rewards_list[-1]
                 mean100 = np.mean(self.ep_rewards) if self.ep_rewards else ep_r
                 print(
-                    f"[FlatPPO] ep {self.episode:4d} | step {self.global_step:7d} | "
-                    f"reward={ep_r:8.4f} | mean100={mean100:8.4f} | loss={mean_loss:.4f} | "
-                    f"lr={current_lr:.2e}",
+                    f"\n{'='*60}\n"
+                    f"EPISODE {self.episode:4d} COMPLETE | Step {self.global_step:7d}/{self.cfg.total_timesteps}\n"
+                    f"  Episode Reward: {ep_r:8.4f}\n"
+                    f"  100-Ep Average: {mean100:8.4f}\n"
+                    f"  PPO Loss:       {mean_loss:.4f}\n"
+                    f"  Learning Rate:  {current_lr:.2e}\n"
+                    f"{'='*60}",
                     flush=True
                 )
                 
@@ -507,11 +510,14 @@ class FlatPPOTrainer:
         if is_root:
             self.save(tag="final")
             
-        print(f"[FlatPPO rank {rank}] Training complete in {time.time() - t0:.1f}s", flush=True)
+        if is_root:
+            print(f"[FlatPPO] Training complete in {time.time() - t0:.1f}s", flush=True)
         self.env.close()
 
     def save(self, tag: str = None):
         """Save model checkpoint."""
+        if self._mpi_rank() != 0:
+            return
         label = tag or f"ep{self.episode:05d}"
         path = self.save_dir / f"flat_ppo_re{self.cfg.Re}_{label}.pt"
         
@@ -524,7 +530,7 @@ class FlatPPOTrainer:
             "obs_std": self.env.obs_std,
             "cfg": self.cfg,
         }, path)
-        print(f"  checkpoint -> {path}", flush=True)
+        print(f"  Saved checkpoint -> {path}", flush=True)
         
     def load(self, path: str):
         """Load model checkpoint."""
@@ -540,4 +546,4 @@ class FlatPPOTrainer:
             self.env._obs_mean = ckpt["obs_mean"]
             self.env._obs_std = ckpt["obs_std"]
         self.env._normalizer_fitted = True
-        print(f"  loaded checkpoint from {path}", flush=True)
+        print(f"  Loaded checkpoint from {path}", flush=True)
