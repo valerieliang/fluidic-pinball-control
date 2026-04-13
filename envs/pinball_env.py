@@ -36,6 +36,7 @@ class PinballEnv(gym.Env):
     Config options:
         use_hrssa: bool = True   # Toggle HR-SSA vs flat mode
         debug: bool = False      # Verbose per-step logging
+        verbose: bool = False    # Control general logging
     """
 
     metadata = {"render.modes": []}
@@ -48,6 +49,11 @@ class PinballEnv(gym.Env):
         # --- Mode toggles ---
         self._use_hrssa = cfg.get("use_hrssa", True)
         self._debug = cfg.get("debug", False)
+        self._verbose = cfg.get("verbose", False)
+        
+        # Store rank info for conditional logging
+        self._rank = _rank()
+        self._is_root = self._rank == 0
         
         # Store num_substeps for potential reward scaling
         self.num_substeps = cfg.get("num_substeps", 2)
@@ -82,7 +88,8 @@ class PinballEnv(gym.Env):
         if self._use_hrssa:
             # Fix zero or negative embed_dim ONLY if using HR-SSA
             if self.embed_dim <= 0:
-                print(f"[rank {_rank()}][PinballEnv] Warning: embed_dim={self.embed_dim} is invalid, setting to 16")
+                if self._is_root:
+                    print(f"[PinballEnv] Warning: embed_dim={self.embed_dim} is invalid, setting to 16")
                 self.embed_dim = 16
             
             self._buf = RegimeObsBuffer(
@@ -120,11 +127,19 @@ class PinballEnv(gym.Env):
         self._max_episode_steps = 200
         self._step_count = 0
 
-        if not self._debug:
-            # Single line summary per rank
-            print(f"[rank {_rank()}][PinballEnv] ready (obs_dim={obs_dim}, use_hrssa={self._use_hrssa})", flush=True)
-        else:
+        if self._is_root and not self._debug:
+            print(f"[PinballEnv] ready (obs_dim={obs_dim}, use_hrssa={self._use_hrssa})", flush=True)
+        elif self._debug:
             print(f"[rank {_rank()}][PinballEnv] __init__ done  obs_dim={obs_dim}", flush=True)
+
+    # ------------------------------------------------------------------
+    # Logging helper
+    # ------------------------------------------------------------------
+    
+    def _log(self, msg: str, force: bool = False):
+        """Conditional logging based on verbose flag and root rank."""
+        if self._is_root and (self._verbose or force or self._debug):
+            print(f"{msg}", flush=True)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -148,24 +163,23 @@ class PinballEnv(gym.Env):
         comm = _mpi_comm()
         rank = _rank()
         
-        rank_str = f"[rank {rank}]"
-        print(f"{rank_str} [WARMUP] Starting normalizer fitting with {self._warmup_steps} steps", flush=True)
+        self._log(f"[WARMUP] Starting normalizer fitting with {self._warmup_steps} steps", force=True)
         start_time = time.time()
         
         if self._debug:
-            print(f"{rank_str} [WARMUP] warmup start ({self._warmup_steps} steps)", flush=True)
+            self._log(f"[WARMUP] warmup start ({self._warmup_steps} steps)")
             
         history = []
         raw = self._env.reset()
         raw_array = self._raw_to_array(raw)
         history.append(raw_array)
         
-        print(f"{rank_str} [WARMUP] Initial reset complete, starting collection loop", flush=True)
+        self._log(f"[WARMUP] Initial reset complete, starting collection loop", force=True)
 
         for i in range(self._warmup_steps):
             # Progress reporting every 50 steps on rank 0
             if rank == 0 and i % 50 == 0:
-                print(f"{rank_str} [WARMUP] Step {i}/{self._warmup_steps}", flush=True)
+                self._log(f"[WARMUP] Step {i}/{self._warmup_steps}", force=True)
             
             if rank == 0:
                 action = self._env.action_space.sample()
@@ -180,30 +194,30 @@ class PinballEnv(gym.Env):
             history.append(raw_array)
             
             if done:
-                print(f"{rank_str} [WARMUP] Episode done at step {i}, resetting", flush=True)
+                self._log(f"[WARMUP] Episode done at step {i}, resetting")
                 raw = self._env.reset()
 
-        print(f"{rank_str} [WARMUP] Collection loop complete, collected {len(history)} samples", flush=True)
+        self._log(f"[WARMUP] Collection loop complete, collected {len(history)} samples", force=True)
 
         if self._use_hrssa and self._buf is not None:
             if rank == 0:
-                print(f"{rank_str} [WARMUP] Computing normalization stats for HR-SSA mode", flush=True)
+                self._log(f"[WARMUP] Computing normalization stats for HR-SSA mode")
                 self._buf.update_normalization(np.stack(history, axis=0))
             if comm is not None:
-                print(f"{rank_str} [WARMUP] Broadcasting HR-SSA normalization stats", flush=True)
+                self._log(f"[WARMUP] Broadcasting HR-SSA normalization stats")
                 self._buf.obs_mean = comm.bcast(self._buf.obs_mean, root=0)
                 self._buf.obs_std = comm.bcast(self._buf.obs_std, root=0)
         else:
             # For flat mode: store normalized stats but don't apply in _make_obs
             if rank == 0:
-                print(f"{rank_str} [WARMUP] Computing normalization stats for FLAT mode", flush=True)
+                self._log(f"[WARMUP] Computing normalization stats for FLAT mode")
                 stacked = np.stack(history, axis=0)
                 self._obs_mean = stacked.mean(axis=0)
                 self._obs_std = stacked.std(axis=0).clip(1e-6)
-                print(f"{rank_str} [WARMUP] Flat mode stats: mean range [{self._obs_mean.min():.3f}, {self._obs_mean.max():.3f}], std range [{self._obs_std.min():.3f}, {self._obs_std.max():.3f}]", flush=True)
+                self._log(f"[WARMUP] Flat mode stats: mean range [{self._obs_mean.min():.3f}, {self._obs_mean.max():.3f}], std range [{self._obs_std.min():.3f}, {self._obs_std.max():.3f}]")
             
             if comm is not None:
-                print(f"{rank_str} [WARMUP] Broadcasting flat mode normalization stats", flush=True)
+                self._log(f"[WARMUP] Broadcasting flat mode normalization stats")
                 if rank == 0:
                     stats = np.array([*self._obs_mean, *self._obs_std])
                 else:
@@ -215,7 +229,7 @@ class PinballEnv(gym.Env):
         
         self._normalizer_fitted = True
         elapsed = time.time() - start_time
-        print(f"{rank_str} [WARMUP] Normalizer fitting COMPLETE after {elapsed:.1f}s", flush=True)
+        self._log(f"[WARMUP] Normalizer fitting COMPLETE after {elapsed:.1f}s", force=True)
 
     # ------------------------------------------------------------------
     # Gym API
@@ -223,34 +237,31 @@ class PinballEnv(gym.Env):
 
     def reset(self):
         comm = _mpi_comm()
-        rank = _rank()
-        rank_str = f"[rank {rank}]"
         
-        print(f"{rank_str} [RESET] Entering reset (normalizer_fitted={self._normalizer_fitted}, post_warmup_done={self._post_warmup_done})", flush=True)
+        self._log(f"[RESET] Entering reset (normalizer_fitted={self._normalizer_fitted}, post_warmup_done={self._post_warmup_done})")
         
         if not self._normalizer_fitted:
-            print(f"{rank_str} [RESET] Normalizer not fitted, calling _fit_normalizer()", flush=True)
+            self._log(f"[RESET] Normalizer not fitted, calling _fit_normalizer()")
             self._fit_normalizer()
-            print(f"{rank_str} [RESET] After normalizer fitting, resetting env", flush=True)
+            self._log(f"[RESET] After normalizer fitting, resetting env")
             raw = self._env.reset()
         else:
-            print(f"{rank_str} [RESET] Normalizer already fitted, resetting env", flush=True)
+            self._log(f"[RESET] Normalizer already fitted, resetting env")
             raw = self._env.reset()
 
         # Additional warmup: run for a few shedding cycles without recording
         # to let transients die out. Only do this ONCE after normalizer fitting.
-        # Must be coordinated across all ranks!
         if not self._post_warmup_done:
-            print(f"{rank_str} [RESET] Starting post-normalizer warmup (discarding transients)...", flush=True)
-            if rank == 0:
-                print(f"{rank_str} [RESET] Post-normalizer warmup - discarding transients for 50 steps", flush=True)
+            self._log(f"[RESET] Starting post-normalizer warmup (discarding transients)...", force=True)
+            if self._is_root:
+                self._log(f"[RESET] Post-normalizer warmup - discarding transients for 50 steps", force=True)
             
             # All ranks participate in the warmup steps
             for i in range(50):  # ~5 shedding cycles
-                if i % 10 == 0 and rank == 0:
-                    print(f"{rank_str} [RESET] Post-warmup step {i}/50", flush=True)
+                if i % 10 == 0 and self._is_root:
+                    self._log(f"[RESET] Post-warmup step {i}/50", force=True)
                     
-                if rank == 0:
+                if self._is_root:
                     action = np.zeros(3)
                 else:
                     action = None
@@ -262,16 +273,16 @@ class PinballEnv(gym.Env):
                 raw, _, _, _ = self._env.step(action)
             
             self._post_warmup_done = True
-            print(f"{rank_str} [RESET] Post-normalizer warmup COMPLETE", flush=True)
+            self._log(f"[RESET] Post-normalizer warmup COMPLETE", force=True)
 
         if self._use_hrssa and self._buf is not None:
-            print(f"{rank_str} [RESET] Resetting HR-SSA buffer", flush=True)
+            self._log(f"[RESET] Resetting HR-SSA buffer")
             self._buf.reset()
 
         # Get final observation
         obs = self._make_obs(self._raw_to_array(raw))
         self._step_count = 0
-        print(f"{rank_str} [RESET] Reset COMPLETE, obs shape={obs.shape}", flush=True)
+        self._log(f"[RESET] Reset COMPLETE, obs shape={obs.shape}")
         return obs
 
     def step(self, action):
