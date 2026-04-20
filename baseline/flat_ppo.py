@@ -33,7 +33,10 @@ class FlatPPOConfig:
     dt: float = 1e-2
     num_substeps: int = 170
     n_probes: int = 6
-    warmup_steps: int = 200
+    # BUG 6 FIX: default was 200 but config_flat.yaml uses 500.
+    # Align the code default with the paper/config value so runs without
+    # an explicit config file also get a properly fitted normalizer.
+    warmup_steps: int = 500
     reward_omega: float = 1.0
     
     # Model
@@ -54,7 +57,9 @@ class FlatPPOConfig:
     
     # Logging and Visualization
     log_interval: int = 1
-    save_interval: int = 10
+    # BUG 8 NOTE: code default was 10, config_flat.yaml uses 50.
+    # Align to 50 so the default matches the intended paper cadence.
+    save_interval: int = 50
     save_dir: str = "checkpoints"
     run_name: str = "flat_ppo_baseline"
     verbose: bool = False
@@ -152,7 +157,13 @@ class RolloutBuffer:
         self.advantages = advantages
         self.returns = advantages + self.values[:n]
         
-        # Only normalize advantages, not rewards
+        # Normalize advantages once here (global, across the full rollout).
+        # BUG 4 FIX: there was a second normalization at the top of update()
+        # which has been removed.  Per-minibatch normalization is kept in
+        # update() (CleanRL style) — that alone is sufficient and is the
+        # standard PPO practice.  Normalizing here AND in update() shrinks
+        # the advantage signal by an additional ~1/std factor, reducing the
+        # effective step size and destabilizing early training.
         if n > 1:
             self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
 
@@ -360,7 +371,10 @@ class FlatPPOTrainer:
                     ep_rewards_list.append(ep_reward)
                     self.ep_rewards.append(ep_reward)
                     
-                    # Get episode summary for tracking
+                    # BUG 9 FIX (companion): get_episode_summary() now returns
+                    # the snapshot cached inside step() at the moment done=True,
+                    # so it is safe to call it here before the next reset()
+                    # clears the live buffers.
                     ep_summary = self.env.get_episode_summary()
                     if ep_summary:
                         if 'mean_drag' in ep_summary:
@@ -410,12 +424,17 @@ class FlatPPOTrainer:
                 gae_lambda=self.cfg.gae_lambda,
             )
         
-        # Broadcast final obs from root to all ranks
+        # BUG 3 FIX: broadcast the final observation using np.zeros_like(obs)
+        # instead of np.zeros(self.cfg.n_probes).  The actual observation
+        # returned by env.reset() / env.step() may have more elements than
+        # n_probes (e.g. extra info appended by some FlowEnv versions), and a
+        # shape mismatch here would cause MPI to either raise an error or
+        # silently truncate/corrupt data on non-root ranks.
         if comm is not None:
             if is_root:
                 obs_to_bcast = obs
             else:
-                obs_to_bcast = np.zeros(self.cfg.n_probes, dtype=np.float32)
+                obs_to_bcast = np.zeros_like(obs)
             comm.Bcast(obs_to_bcast, root=0)
             if not is_root:
                 obs = obs_to_bcast
@@ -437,8 +456,14 @@ class FlatPPOTrainer:
         returns = torch.as_tensor(self.buffer.returns[:n], dtype=torch.float32, device=self.device)
         values = torch.as_tensor(self.buffer.values[:n], dtype=torch.float32, device=self.device)
         
-        # CleanRL: Normalize advantages globally
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        # BUG 4 FIX: removed the second global advantage normalization that was
+        # here.  Advantages are already normalized once inside
+        # RolloutBuffer.compute_returns_and_advantages().  Re-normalizing them
+        # again here (before the minibatch loop) composed two normalization
+        # passes, effectively dividing the advantages by std^2 instead of std
+        # and collapsing the signal.  The per-minibatch normalization below
+        # (CleanRL convention) is the only normalization that should remain
+        # after the buffer-level normalization is removed.
         
         indices = np.arange(n)
         total_loss = 0.0

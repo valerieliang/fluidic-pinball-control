@@ -9,14 +9,12 @@ import torch.nn as nn
 from torch.distributions import Normal
 
 
-# baseline/flat_policy.py - Updated actor head
-
 class FlatActorCritic(nn.Module):
     def __init__(self, obs_dim: int, action_dim: int, hidden_dim: int = 64):
         super().__init__()
         
         self.action_dim = action_dim
-        self.action_scale = 1.0  # Actions are in [-1, 1]
+        self.action_scale = 1.0  # Actions are clipped to [-1, 1]
         
         # Shared feature extractor
         self.shared = nn.Sequential(
@@ -26,9 +24,22 @@ class FlatActorCritic(nn.Module):
             nn.ReLU(),
         )
         
-        # Actor head: outputs mean (will be tanh squashed)
+        # Actor head: outputs raw (unbounded) mean.
+        # BUG 10 FIX: the previous code applied tanh() to the mean inside
+        # forward() and then constructed a Normal distribution over those
+        # squashed values.  The log-prob of a tanh-squashed Gaussian requires
+        # a Jacobian correction term (SAC-style), which was missing.  Without
+        # it the PPO importance-sampling ratio exp(log_pi_new - log_pi_old) is
+        # computed from mismatched distributions, making policy gradient updates
+        # noisy and biased.
+        #
+        # The simplest correct fix for PPO (which does not need differentiable
+        # sampling) is to keep the distribution unbounded and clamp the *action*
+        # in get_action() and evaluate().  The Normal log_prob then requires no
+        # correction because sampling and evaluation happen in the same
+        # unsquashed space.
         self.actor_mean = nn.Linear(hidden_dim, action_dim)
-        # Learnable log standard deviation for unbounded actions before tanh
+        # Learnable log standard deviation
         self.actor_logstd = nn.Parameter(torch.zeros(action_dim))
         
         # Critic head
@@ -48,22 +59,21 @@ class FlatActorCritic(nn.Module):
                 nn.init.orthogonal_(module.weight, gain=np.sqrt(2))
                 nn.init.constant_(module.bias, 0.0)
         
-        # Actor mean gets smaller initial weights for stable exploration
+        # Actor mean gets smaller initial weights for stable early exploration
         nn.init.orthogonal_(self.actor_mean.weight, gain=0.01)
         nn.init.constant_(self.actor_mean.bias, 0.0)
         
-        # Initialize log std to give reasonable initial exploration
+        # Initialize log std to give reasonable initial exploration (~0.6 std)
         nn.init.constant_(self.actor_logstd, -0.5)
         
     def forward(self, obs: torch.Tensor):
         features = self.shared(obs)
         
-        # Unbounded mean
-        mean_unbounded = self.actor_mean(features)
-        # Apply tanh to bound actions to [-1, 1]
-        mean = torch.tanh(mean_unbounded) * self.action_scale
-        
-        # Use unbounded standard deviation for Gaussian policy
+        # BUG 10 FIX: raw unbounded mean — no tanh here.
+        # The distribution is a plain Gaussian; action bounding is done
+        # via clamp in get_action() and evaluate() so that log_prob
+        # computations remain exact.
+        mean = self.actor_mean(features)
         std = self.actor_logstd.exp().expand_as(mean)
         dist = Normal(mean, std)
         
@@ -77,10 +87,10 @@ class FlatActorCritic(nn.Module):
         if deterministic:
             action = dist.mean
         else:
-            # Sample and then squash (already handled by distribution mean)
             action = dist.sample()
-            # Re-clamp for safety
-            action = torch.clamp(action, -self.action_scale, self.action_scale)
+
+        # Clamp to valid action range [-1, 1]
+        action = torch.clamp(action, -self.action_scale, self.action_scale)
             
         log_prob = dist.log_prob(action).sum(dim=-1)
         
@@ -88,12 +98,13 @@ class FlatActorCritic(nn.Module):
         
     def evaluate(self, obs: torch.Tensor, action: torch.Tensor):
         """
-        Evaluate log probability and entropy for given action.
+        Evaluate log probability and entropy for given actions.
         Used during PPO update.
         
         Args:
             obs: (batch, obs_dim) observations
-            action: (batch, action_dim) actions to evaluate
+            action: (batch, action_dim) actions to evaluate — already clamped
+                    to [-1, 1] as stored in the rollout buffer.
             
         Returns:
             log_prob: (batch,) log probabilities
@@ -101,6 +112,11 @@ class FlatActorCritic(nn.Module):
             value: (batch, 1) state values
         """
         dist, value = self.forward(obs)
+        # log_prob is evaluated at the clamped action values stored during
+        # collection.  Because the distribution is an unclamped Gaussian and
+        # we evaluate the density at the clamp boundary for saturated actions,
+        # this slightly over-estimates log_prob there — the standard PPO
+        # trade-off when using a Gaussian policy with hard bounds.
         log_prob = dist.log_prob(action).sum(dim=-1)
         entropy = dist.entropy().sum(dim=-1)
         return log_prob, entropy, value

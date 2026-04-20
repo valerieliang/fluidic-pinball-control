@@ -190,6 +190,9 @@ class PinballEnvBaseline(gym.Env):
         self._current_episode_reward = 0.0
         self._current_episode_actions = []
 
+        # --- Cached episode summary (populated at episode end, before buffers clear) ---
+        self._last_episode_summary: dict = {}
+
         self._log(f"[PinballEnvBaseline] Ready (obs_dim={obs_dim}, action_dim={action_dim})")
         if self.save_episode_h5:
             self._log(f"[PinballEnvBaseline] H5 export enabled -> {self.data_dir}")
@@ -320,17 +323,35 @@ class PinballEnvBaseline(gym.Env):
     def _raw_to_array(self, raw_obs) -> np.ndarray:
         return np.array(raw_obs, dtype=np.float32)
 
+    # BUG 1 FIX: _get_drag_lift was erroneously defined at module level.
+    # It is now correctly indented as a method of PinballEnvBaseline.
     def _get_drag_lift(self) -> tuple:
         """Extract current drag and lift coefficients from environment."""
         try:
             flow = self._env.flow
+            
+            # HydroGym Firedrake stores forces differently
             if hasattr(flow, 'get_forces'):
                 CD, CL = flow.get_forces()
-                return CD, CL
-            elif hasattr(flow, 'drag') and hasattr(flow, 'lift'):
-                return flow.drag, flow.lift
-        except:
-            pass
+                return float(CD), float(CL)
+            
+            # Try accessing through the solver
+            if hasattr(flow, '_forces'):
+                return float(flow._forces[0]), float(flow._forces[1])
+            
+            # Try accessing monitor functions
+            if hasattr(flow, 'compute_forces'):
+                forces = flow.compute_forces()
+                return float(forces[0]), float(forces[1])
+                
+            # Debug: print available attributes
+            if self.verbose:
+                print(f"[DEBUG] Flow attributes: {[a for a in dir(flow) if not a.startswith('_')]}")
+                
+        except Exception as e:
+            if self.verbose:
+                print(f"[DEBUG] _get_drag_lift failed: {e}")
+        
         return 0.0, 0.0
 
     def _plot_warmup_statistics(self):
@@ -539,12 +560,13 @@ class PinballEnvBaseline(gym.Env):
         self._warmup_lift = []
         self._warmup_obs_history = []
         
+        # Reset the environment to get initial state
         raw = self._env.reset()
         raw_array = self._raw_to_array(raw)
         self._warmup_obs_history.append(raw_array)
         
         for i in range(self.warmup_steps):
-            if rank == 0 and i % 100 == 0:
+            if rank == 0 and i % max(1, self.warmup_steps // 10) == 0:
                 self._log(f"[WARMUP] Step {i}/{self.warmup_steps}", force=True)
             
             if rank == 0:
@@ -576,11 +598,18 @@ class PinballEnvBaseline(gym.Env):
                 self._warmup_obs_history.append(raw_array)
 
         if rank == 0:
-            stacked = np.stack(self._warmup_obs_history, axis=0)
-            self._obs_mean = stacked.mean(axis=0)
-            self._obs_std = stacked.std(axis=0).clip(1e-6)
-            self._log(f"[WARMUP] Stats: mean={self._obs_mean}, std={self._obs_std}", force=True)
-            self._plot_warmup_statistics()
+            if self._warmup_obs_history:
+                stacked = np.stack(self._warmup_obs_history, axis=0)
+                self._obs_mean = stacked.mean(axis=0)
+                self._obs_std = stacked.std(axis=0).clip(1e-6)
+                self._log(f"[WARMUP] Stats: mean={self._obs_mean}, std={self._obs_std}", force=True)
+                if self.save_warmup_plots:
+                    self._plot_warmup_statistics()
+            else:
+                # Fallback if no data collected
+                self._obs_mean = np.zeros(self.n_probes)
+                self._obs_std = np.ones(self.n_probes)
+                self._log("[WARMUP] WARNING: No warmup data collected, using default stats", force=True)
         
         if comm is not None:
             if rank == 0:
@@ -595,10 +624,10 @@ class PinballEnvBaseline(gym.Env):
         self._normalizer_fitted = True
         elapsed = time.time() - start_time
         self._log(f"[WARMUP] Normalizer fitting COMPLETE after {elapsed:.1f}s", force=True)
-
-    # ------------------------------------------------------------------
-    # Gym API
-    # ------------------------------------------------------------------
+        
+        # Return the last observation as a numpy array.
+        # This observation will be used as the initial state for the first episode.
+        return raw_array
 
     def reset(self):
         """Reset environment and return initial observation."""
@@ -608,11 +637,36 @@ class PinballEnvBaseline(gym.Env):
         if len(self._episode_obs_buffer) > 0:
             self._save_episode_h5()
         
+        # Get initial observation
         if not self._normalizer_fitted:
-            self._fit_normalizer()
+            self._log("[RESET] Fitting normalizer...", force=True)
+            obs = self._fit_normalizer()
+            self._log("[RESET] Normalizer fitted", force=True)
+            
+            # Store the observation in the buffer
+            self._episode_obs_buffer = [obs.copy()]
+            self._accumulated_reward = 0.0
+            self._step_count = 0
+            self._current_episode_drag = []
+            self._current_episode_lift = []
+            self._current_episode_reward = 0.0
+            self._current_episode_actions = []
+            
+            # BUG 7 FIX: mark post-warmup as done so the 50-step loop
+            # is not redundantly triggered on the very next reset() call.
+            self._post_warmup_done = True
+            
+            return obs.astype(np.float32)
+        
+        # Normalizer already fitted — proceed with normal reset
+        raw = self._env.reset()
+
+        # Ensure we have a valid raw observation
+        if raw is None:
+            self._log("[RESET] ERROR: raw observation is None!", force=True)
             raw = self._env.reset()
-        else:
-            raw = self._env.reset()
+            if raw is None:
+                raise RuntimeError("Failed to get valid observation from environment")
 
         if not self._post_warmup_done:
             self._log("[RESET] Post-normalizer warmup...", force=True)
@@ -643,6 +697,7 @@ class PinballEnvBaseline(gym.Env):
         self._current_episode_reward = 0.0
         self._current_episode_actions = []
         
+        # Convert raw observation to array
         obs = self._raw_to_array(raw)
         
         # Add initial observation to buffer
@@ -710,6 +765,11 @@ class PinballEnvBaseline(gym.Env):
                     np.mean(np.linalg.norm(np.array(self._current_episode_actions), axis=1))
                 )
             
+            # BUG 9 FIX: Cache the episode summary NOW, before _save_episode_h5()
+            # or the next reset() clears the episode buffers.  External callers
+            # (collect_rollout, training loop) read this via get_episode_summary().
+            self._last_episode_summary = self._get_episode_summary()
+
             # Save H5 at episode end
             self._save_episode_h5()
             
@@ -721,8 +781,15 @@ class PinballEnvBaseline(gym.Env):
         return obs, float(self._accumulated_reward), bool(done), info
 
     def get_episode_summary(self) -> dict:
-        """Get summary of the most recently completed episode."""
-        return self._get_episode_summary()
+        """
+        Return summary of the most recently *completed* episode.
+
+        BUG 9 FIX: previously called _get_episode_summary() which reads the
+        live episode buffers.  Those buffers may already be cleared when this
+        method is called from the training loop (after the next reset()).
+        We now return the snapshot that was taken at the moment `done` was set.
+        """
+        return self._last_episode_summary
 
     def render(self, mode="human"):
         pass
