@@ -20,8 +20,14 @@ ent_coef: 0.01
 max_grad_norm: 0.5
 lr: 0.0003  
 
-# Logging
+# Logging and Visualization
 log_interval: 1
 save_interval: 50
 run_name: "flat_ppo_re100"
-verbose: false  # Set to true for detailed debug logging
+verbose: false
+viz_dir: "visualizations"
+data_dir: "episode_data"
+save_warmup_plots: true
+save_episode_snapshots: true
+save_episode_h5: true
+snapshot_freq: 10

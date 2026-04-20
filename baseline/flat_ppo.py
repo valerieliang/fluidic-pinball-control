@@ -2,6 +2,7 @@
 """
 Flat PPO training loop matching HydroGym paper baseline.
 Uses standard PPO with GAE, without hierarchical structure.
+Includes best model tracking and comprehensive logging.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import torch.nn as nn
 import torch.optim as optim
 import yaml
 
-from envs.pinball_env import PinballEnv
+from envs.pinball_env_baseline import PinballEnvBaseline as PinballEnv
 from baseline.flat_policy import FlatActorCritic
 
 
@@ -51,12 +52,18 @@ class FlatPPOConfig:
     max_grad_norm: float = 0.5
     lr: float = 3e-4
     
-    # Logging
+    # Logging and Visualization
     log_interval: int = 1
     save_interval: int = 10
     save_dir: str = "checkpoints"
     run_name: str = "flat_ppo_baseline"
-    verbose: bool = False  # Add verbose flag
+    verbose: bool = False
+    viz_dir: str = "visualizations"
+    data_dir: str = "episode_data"
+    save_warmup_plots: bool = True
+    save_episode_snapshots: bool = True
+    save_episode_h5: bool = True
+    snapshot_freq: int = 10
     
     @classmethod
     def from_yaml(cls, path: str) -> "FlatPPOConfig":
@@ -68,12 +75,11 @@ class FlatPPOConfig:
             'Re', 'dt', 'num_substeps', 'n_probes', 'warmup_steps', 'reward_omega',
             'total_timesteps', 'n_steps', 'n_epochs', 'batch_size', 'gamma', 
             'gae_lambda', 'clip_eps', 'vf_coef', 'ent_coef', 'max_grad_norm', 'lr',
-            'log_interval', 'save_interval', 'hidden_dim'
+            'log_interval', 'save_interval', 'hidden_dim', 'snapshot_freq'
         ]
         
         for field in numeric_fields:
             if field in d and isinstance(d[field], str):
-                # Try to convert to float first, then int if needed
                 try:
                     if '.' in d[field]:
                         d[field] = float(d[field])
@@ -83,8 +89,10 @@ class FlatPPOConfig:
                     pass
         
         # Handle boolean fields
-        if 'verbose' in d and isinstance(d['verbose'], str):
-            d['verbose'] = d['verbose'].lower() == 'true'
+        bool_fields = ['verbose', 'save_warmup_plots', 'save_episode_snapshots', 'save_episode_h5']
+        for field in bool_fields:
+            if field in d and isinstance(d[field], str):
+                d[field] = d[field].lower() == 'true'
         
         # Only keep fields that exist in the dataclass
         valid = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
@@ -174,7 +182,13 @@ class FlatPPOTrainer:
             "use_hrssa": False,  # Force flat PPO mode
             "use_regime_encoder": False,  # Disable encoder
             "reward_omega": cfg.reward_omega,
-            "verbose": cfg.verbose,  # Pass verbose flag to env
+            "verbose": cfg.verbose,
+            "viz_dir": cfg.viz_dir,
+            "data_dir": cfg.data_dir,
+            "save_warmup_plots": cfg.save_warmup_plots,
+            "save_episode_snapshots": cfg.save_episode_snapshots,
+            "save_episode_h5": cfg.save_episode_h5,
+            "snapshot_freq": cfg.snapshot_freq,
         })
         
         # Override observation to use only raw probes (no embedding)
@@ -211,9 +225,26 @@ class FlatPPOTrainer:
         self.save_dir = Path(cfg.save_dir) / cfg.run_name
         self.save_dir.mkdir(parents=True, exist_ok=True)
         
+        # Best model tracking
+        self.best_reward = -np.inf
+        self.best_drag = np.inf
+        self.best_lift = np.inf
+        self.best_episode = 0
+        self.best_model_dir = self.save_dir / "best_models"
+        self.best_model_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Metrics tracking
         self.ep_rewards: deque[float] = deque(maxlen=100)
+        self.ep_drags: deque[float] = deque(maxlen=100)
+        self.ep_lifts: deque[float] = deque(maxlen=100)
         self.global_step = 0
         self.episode = 0
+        
+        # Loss tracking
+        self.last_policy_loss = 0.0
+        self.last_value_loss = 0.0
+        self.last_entropy = 0.0
+        self.last_approx_kl = 0.0
         
     @staticmethod
     def _mpi_rank() -> int:
@@ -222,7 +253,52 @@ class FlatPPOTrainer:
             return MPI.COMM_WORLD.Get_rank()
         except ImportError:
             return 0
-            
+
+    def _check_and_save_best(self, episode_reward: float, episode_drag: float = None, episode_lift: float = None):
+        """Check if current model is best and save if so."""
+        is_best = False
+        reasons = []
+        
+        # Check reward improvement
+        if episode_reward > self.best_reward:
+            self.best_reward = episode_reward
+            is_best = True
+            reasons.append("reward")
+        
+        # Check drag improvement (lower is better)
+        if episode_drag is not None and episode_drag < self.best_drag:
+            self.best_drag = episode_drag
+            if "drag" not in reasons:
+                is_best = True
+                reasons.append("drag")
+        
+        # Check lift improvement (lower absolute lift is better)
+        if episode_lift is not None and episode_lift < self.best_lift:
+            self.best_lift = episode_lift
+            if "lift" not in reasons and "drag" not in reasons:
+                is_best = True
+                reasons.append("lift")
+        
+        if is_best:
+            self.best_episode = self.episode
+            reason_str = "_".join(reasons)
+            path = self.best_model_dir / f"best_model_{reason_str}_ep{self.episode:05d}.pt"
+            torch.save({
+                "episode": self.episode,
+                "global_step": self.global_step,
+                "policy": self.policy.state_dict(),
+                "optimizer": self.optimizer.state_dict(),
+                "obs_mean": self.env.obs_mean,
+                "obs_std": self.env.obs_std,
+                "cfg": self.cfg,
+                "best_reward": self.best_reward,
+                "best_drag": self.best_drag,
+                "best_lift": self.best_lift,
+                "episode_reward": episode_reward,
+                "episode_drag": episode_drag,
+                "episode_lift": episode_lift,
+            }, path)
+            print(f"  New best model ({reason_str}) saved -> {path}", flush=True)
 
     def collect_rollout(self, obs: np.ndarray):
         """Collect n_steps of experience."""
@@ -283,6 +359,15 @@ class FlatPPOTrainer:
                     self.episode += 1
                     ep_rewards_list.append(ep_reward)
                     self.ep_rewards.append(ep_reward)
+                    
+                    # Get episode summary for tracking
+                    ep_summary = self.env.get_episode_summary()
+                    if ep_summary:
+                        if 'mean_drag' in ep_summary:
+                            self.ep_drags.append(ep_summary['mean_drag'])
+                        if 'mean_abs_lift' in ep_summary:
+                            self.ep_lifts.append(ep_summary['mean_abs_lift'])
+                    
                     if self.verbose:
                         print(f"[COLLECT] Episode {self.episode} finished, reward={ep_reward:.4f}", flush=True)
                     ep_reward = 0.0
@@ -447,6 +532,11 @@ class FlatPPOTrainer:
         
         if is_root:
             print(f"[FlatPPO] Starting training", flush=True)
+            print(f"[FlatPPO] Configuration:")
+            print(f"  Re={self.cfg.Re}, mesh={self.cfg.mesh}, substeps={self.cfg.num_substeps}")
+            print(f"  total_timesteps={self.cfg.total_timesteps:,}, n_steps={self.cfg.n_steps}")
+            print(f"  lr={self.cfg.lr}, ent_coef={self.cfg.ent_coef}")
+            print(f"  save_dir={self.save_dir}")
         
         if resume_from and is_root:
             self.load(resume_from)
@@ -493,16 +583,39 @@ class FlatPPOTrainer:
             if is_root and ep_rewards_list:
                 ep_r = ep_rewards_list[-1]
                 mean100 = np.mean(self.ep_rewards) if self.ep_rewards else ep_r
-                print(
-                    f"\n{'='*60}\n"
-                    f"EPISODE {self.episode:4d} COMPLETE | Step {self.global_step:7d}/{self.cfg.total_timesteps}\n"
-                    f"  Episode Reward: {ep_r:8.4f}\n"
-                    f"  100-Ep Average: {mean100:8.4f}\n"
-                    f"  PPO Loss:       {mean_loss:.4f}\n"
-                    f"  Learning Rate:  {current_lr:.2e}\n"
+                
+                # Get episode summary from environment
+                ep_summary = self.env.get_episode_summary()
+                ep_drag = ep_summary.get('mean_drag', None)
+                ep_lift = ep_summary.get('mean_abs_lift', None)
+                
+                # Check and save best model
+                self._check_and_save_best(ep_r, ep_drag, ep_lift)
+                
+                # Build output string
+                output_lines = [
+                    f"\n{'='*60}",
+                    f"EPISODE {self.episode:4d} COMPLETE | Step {self.global_step:7d}/{self.cfg.total_timesteps}",
+                    f"  Episode Reward: {ep_r:8.4f}",
+                    f"  100-Ep Average: {mean100:8.4f}",
+                ]
+                
+                if ep_drag is not None:
+                    drag100 = np.mean(self.ep_drags) if self.ep_drags else ep_drag
+                    output_lines.append(f"  Mean Drag:      {ep_drag:8.4f}  (100-ep avg: {drag100:8.4f})")
+                
+                if ep_lift is not None:
+                    lift100 = np.mean(self.ep_lifts) if self.ep_lifts else ep_lift
+                    output_lines.append(f"  Mean |Lift|:    {ep_lift:8.4f}  (100-ep avg: {lift100:8.4f})")
+                
+                output_lines.extend([
+                    f"  PPO Loss:       {mean_loss:.4f}",
+                    f"  Learning Rate:  {current_lr:.2e}",
+                    f"  Best Reward:    {self.best_reward:.4f} (ep {self.best_episode})",
                     f"{'='*60}",
-                    flush=True
-                )
+                ])
+                
+                print("\n".join(output_lines), flush=True)
                 
                 if self.episode > 0 and self.episode % self.cfg.save_interval == 0:
                     self.save()
@@ -510,8 +623,15 @@ class FlatPPOTrainer:
         if is_root:
             self.save(tag="final")
             
-        if is_root:
-            print(f"[FlatPPO] Training complete in {time.time() - t0:.1f}s", flush=True)
+            # Print final best metrics
+            print(f"\n{'='*60}")
+            print(f"TRAINING COMPLETE")
+            print(f"  Best Reward: {self.best_reward:.4f} (episode {self.best_episode})")
+            print(f"  Best Drag:   {self.best_drag:.4f}")
+            print(f"  Best |Lift|: {self.best_lift:.4f}")
+            print(f"  Total time:  {time.time() - t0:.1f}s")
+            print(f"{'='*60}", flush=True)
+            
         self.env.close()
 
     def save(self, tag: str = None):
@@ -529,6 +649,9 @@ class FlatPPOTrainer:
             "obs_mean": self.env.obs_mean,
             "obs_std": self.env.obs_std,
             "cfg": self.cfg,
+            "best_reward": self.best_reward,
+            "best_drag": self.best_drag,
+            "best_lift": self.best_lift,
         }, path)
         print(f"  Saved checkpoint -> {path}", flush=True)
         
@@ -539,11 +662,19 @@ class FlatPPOTrainer:
         self.global_step = ckpt["global_step"]
         self.policy.load_state_dict(ckpt["policy"])
         self.optimizer.load_state_dict(ckpt["optimizer"])
-        if self.env._use_hrssa and self.env._buf is not None:
-            self.env._buf.obs_mean = ckpt["obs_mean"]
-            self.env._buf.obs_std = ckpt["obs_std"]
-        else:
+        
+        # Load normalization stats
+        if hasattr(self.env, '_obs_mean'):
             self.env._obs_mean = ckpt["obs_mean"]
             self.env._obs_std = ckpt["obs_std"]
         self.env._normalizer_fitted = True
+        
+        # Load best metrics if available
+        if "best_reward" in ckpt:
+            self.best_reward = ckpt["best_reward"]
+        if "best_drag" in ckpt:
+            self.best_drag = ckpt["best_drag"]
+        if "best_lift" in ckpt:
+            self.best_lift = ckpt["best_lift"]
+            
         print(f"  Loaded checkpoint from {path}", flush=True)
