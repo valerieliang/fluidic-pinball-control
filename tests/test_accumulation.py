@@ -1,14 +1,15 @@
 # test_accumulation.py 
 # test of reward accumulation
+
+# Suppress Gym warning
+import os
+os.environ["GYM_WARNINGS"] = "false"
+
 import sys
 sys.path.insert(0, os.getcwd()) 
 
 import warnings
 warnings.filterwarnings("ignore")
-
-# Suppress Gym warning
-import os
-os.environ["GYM_WARNINGS"] = "false"
 
 from envs.pinball_env_baseline import PinballEnvBaseline
 
