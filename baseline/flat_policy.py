@@ -25,19 +25,6 @@ class FlatActorCritic(nn.Module):
         )
         
         # Actor head: outputs raw (unbounded) mean.
-        # BUG 10 FIX: the previous code applied tanh() to the mean inside
-        # forward() and then constructed a Normal distribution over those
-        # squashed values.  The log-prob of a tanh-squashed Gaussian requires
-        # a Jacobian correction term (SAC-style), which was missing.  Without
-        # it the PPO importance-sampling ratio exp(log_pi_new - log_pi_old) is
-        # computed from mismatched distributions, making policy gradient updates
-        # noisy and biased.
-        #
-        # The simplest correct fix for PPO (which does not need differentiable
-        # sampling) is to keep the distribution unbounded and clamp the *action*
-        # in get_action() and evaluate().  The Normal log_prob then requires no
-        # correction because sampling and evaluation happen in the same
-        # unsquashed space.
         self.actor_mean = nn.Linear(hidden_dim, action_dim)
         # Learnable log standard deviation
         self.actor_logstd = nn.Parameter(torch.zeros(action_dim))
@@ -68,11 +55,6 @@ class FlatActorCritic(nn.Module):
         
     def forward(self, obs: torch.Tensor):
         features = self.shared(obs)
-        
-        # BUG 10 FIX: raw unbounded mean — no tanh here.
-        # The distribution is a plain Gaussian; action bounding is done
-        # via clamp in get_action() and evaluate() so that log_prob
-        # computations remain exact.
         mean = self.actor_mean(features)
         std = self.actor_logstd.exp().expand_as(mean)
         dist = Normal(mean, std)

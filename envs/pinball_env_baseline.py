@@ -323,36 +323,21 @@ class PinballEnvBaseline(gym.Env):
     def _raw_to_array(self, raw_obs) -> np.ndarray:
         return np.array(raw_obs, dtype=np.float32)
 
-    # BUG 1 FIX: _get_drag_lift was erroneously defined at module level.
-    # It is now correctly indented as a method of PinballEnvBaseline.
     def _get_drag_lift(self) -> tuple:
         """Extract current drag and lift coefficients from environment."""
         try:
             flow = self._env.flow
-            
-            # HydroGym Firedrake stores forces differently
-            if hasattr(flow, 'get_forces'):
-                CD, CL = flow.get_forces()
-                return float(CD), float(CL)
-            
-            # Try accessing through the solver
-            if hasattr(flow, '_forces'):
-                return float(flow._forces[0]), float(flow._forces[1])
-            
-            # Try accessing monitor functions
             if hasattr(flow, 'compute_forces'):
-                forces = flow.compute_forces()
-                return float(forces[0]), float(forces[1])
-                
-            # Debug: print available attributes
-            if self.verbose:
-                print(f"[DEBUG] Flow attributes: {[a for a in dir(flow) if not a.startswith('_')]}")
-                
+                drag_list, lift_list = flow.compute_forces()
+                # Sum across all 3 cylinders
+                CD = float(sum(drag_list))
+                CL = float(sum(lift_list))
+                return CD, CL
         except Exception as e:
             if self.verbose:
                 print(f"[DEBUG] _get_drag_lift failed: {e}")
-        
         return 0.0, 0.0
+
 
     def _plot_warmup_statistics(self):
         """Generate and save warmup statistics plots."""
@@ -578,18 +563,25 @@ class PinballEnvBaseline(gym.Env):
                 action = comm.bcast(action, root=0)
             
             step_reward = 0.0
-            for _ in range(self.num_substeps):
-                raw, reward, done, _ = self._env.step(action)
+            final_CD, final_CL = 0.0, 0.0  # Initialize
+            
+            for substep_idx in range(self.num_substeps):
+                raw, reward, done, info = self._env.step(action)
                 step_reward += reward
+                
+                # Store the forces from the final substep only (reduces overhead)
+                if substep_idx == self.num_substeps - 1:
+                    final_CD, final_CL = self._get_drag_lift()
+                
                 if done:
                     break
             
             raw_array = self._raw_to_array(raw)
             self._warmup_obs_history.append(raw_array)
             
-            CD, CL = self._get_drag_lift()
-            self._warmup_drag.append(CD)
-            self._warmup_lift.append(CL)
+            # Use the forces we captured
+            self._warmup_drag.append(final_CD)
+            self._warmup_lift.append(final_CL)
             self._warmup_rewards.append(step_reward)
             
             if done:
@@ -651,14 +643,11 @@ class PinballEnvBaseline(gym.Env):
             self._current_episode_lift = []
             self._current_episode_reward = 0.0
             self._current_episode_actions = []
-            
-            # BUG 7 FIX: mark post-warmup as done so the 50-step loop
-            # is not redundantly triggered on the very next reset() call.
             self._post_warmup_done = True
             
             return obs.astype(np.float32)
         
-        # Normalizer already fitted — proceed with normal reset
+        # Normalizer already fitted -> proceed with normal reset
         raw = self._env.reset()
 
         # Ensure we have a valid raw observation
@@ -725,11 +714,15 @@ class PinballEnvBaseline(gym.Env):
         # Run through substeps
         for substep in range(self.num_substeps):
             raw_obs, reward, step_done, info = self._env.step(action)
+            
             self._accumulated_reward += reward
             self._episode_substep_rewards.append(reward)
             final_raw_obs = raw_obs
             
+            # Get forces directly from flow.compute_forces() since HydroGym's
+            # info dict does not populate 'CD'/'CL' keys reliably.
             CD, CL = self._get_drag_lift()
+            
             self._episode_drag_buffer.append(CD)
             self._episode_lift_buffer.append(CL)
             self._current_episode_drag.append(CD)
@@ -764,10 +757,7 @@ class PinballEnvBaseline(gym.Env):
                 self._episode_action_magnitudes.append(
                     np.mean(np.linalg.norm(np.array(self._current_episode_actions), axis=1))
                 )
-            
-            # BUG 9 FIX: Cache the episode summary NOW, before _save_episode_h5()
-            # or the next reset() clears the episode buffers.  External callers
-            # (collect_rollout, training loop) read this via get_episode_summary().
+
             self._last_episode_summary = self._get_episode_summary()
 
             # Save H5 at episode end
@@ -781,14 +771,6 @@ class PinballEnvBaseline(gym.Env):
         return obs, float(self._accumulated_reward), bool(done), info
 
     def get_episode_summary(self) -> dict:
-        """
-        Return summary of the most recently *completed* episode.
-
-        BUG 9 FIX: previously called _get_episode_summary() which reads the
-        live episode buffers.  Those buffers may already be cleared when this
-        method is called from the training loop (after the next reset()).
-        We now return the snapshot that was taken at the moment `done` was set.
-        """
         return self._last_episode_summary
 
     def render(self, mode="human"):
