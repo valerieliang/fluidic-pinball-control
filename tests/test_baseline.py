@@ -71,11 +71,11 @@ def test_with_long_warmup():
         max_lift = max(abs(l) for l in env._episode_lift_buffer)
         
         if max_drag < 1e-6 and max_lift < 1e-6:
-            print("\n    ❌ WARNING: All forces are zero! CFD may not be computing forces.")
+            print("\n    WARNING: All forces are zero! CFD may not be computing forces.")
         elif max_drag < 0.01 and max_lift < 0.01:
-            print("\n    ⚠️ Forces are very small (<0.01). Flow may still be developing.")
+            print("\n    Forces are very small (<0.01). Flow may still be developing.")
         else:
-            print("\n    ✅ Forces are non-zero and reasonable.")
+            print("\n    Forces are non-zero and reasonable.")
     
     env.close()
     return env
@@ -127,26 +127,26 @@ def test_multiple_steps_with_monitoring():
     print("\n[4] OVERALL FORCE STATISTICS:")
     print(f"    Total drag samples: {len(all_drags)}")
     print(f"    Total lift samples: {len(all_lifts)}")
-    print(f"    Drag - Mean: {np.mean(all_drags):.6f} ± {np.std(all_drags):.6f}")
+    print(f"    Drag - Mean: {np.mean(all_drags):.6f} +- {np.std(all_drags):.6f}")
     print(f"    Drag - Range: [{np.min(all_drags):.6f}, {np.max(all_drags):.6f}]")
-    print(f"    Lift - Mean: {np.mean(all_lifts):.6f} ± {np.std(all_lifts):.6f}")
+    print(f"    Lift - Mean: {np.mean(all_lifts):.6f} +- {np.std(all_lifts):.6f}")
     print(f"    Lift - Range: [{np.min(all_lifts):.6f}, {np.max(all_lifts):.6f}]")
     
     # Check if forces are non-zero
     if np.max(np.abs(all_drags)) < 1e-6 and np.max(np.abs(all_lifts)) < 1e-6:
-        print("\n    ❌❌❌ CRITICAL: All forces are zero!")
+        print("\n    CRITICAL: All forces are zero!")
         print("    The CFD simulation is NOT computing drag/lift forces.")
         print("    Check:")
         print("      1. Is the flow solver actually running?")
         print("      2. Are the force probes properly configured?")
         print("      3. Is the simulation time advancing?")
     elif np.max(np.abs(all_drags)) < 0.001:
-        print("\n    ⚠️ Forces are very small. Possible issues:")
+        print("\n    Forces are very small. Possible issues:")
         print("      - Re=100 may produce very small forces")
         print("      - Mesh might be too coarse")
         print("      - Need even longer warmup")
     else:
-        print("\n    ✅ Forces are non-zero and within expected range.")
+        print("\n    Forces are non-zero and within expected range.")
     
     env.close()
 
@@ -192,7 +192,7 @@ def test_force_scaling():
             'max_drag': np.max(np.abs(all_drags))
         }
         
-        print(f"    Mean drag: {results[Re]['mean_drag']:.6f} ± {results[Re]['std_drag']:.6f}")
+        print(f"    Mean drag: {results[Re]['mean_drag']:.6f} +- {results[Re]['std_drag']:.6f}")
         print(f"    Mean |lift|: {results[Re]['mean_lift']:.6f}")
         
         env.close()
@@ -275,8 +275,3 @@ if __name__ == "__main__":
     print("\n" + "=" * 70)
     print("DIAGNOSTIC COMPLETE")
     print("=" * 70)
-    print("\nInterpretation guide:")
-    print("  - If all forces are zero (1e-6 or less): CFD solver not computing forces")
-    print("  - If forces are very small (<0.001): Need longer warmup or higher Re")
-    print("  - If forces are reasonable (0.01-1.0): System is working correctly")
-    print("  - If forces vary with Re: Force computation is working properly")
