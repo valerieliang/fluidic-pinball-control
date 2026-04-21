@@ -178,11 +178,7 @@ class FlatPPOTrainer:
             "dt": cfg.dt,
             "num_substeps": cfg.num_substeps,
             "n_probes": cfg.n_probes,
-            "buffer_len": 1,  # Not used in flat PPO
-            "embed_dim": 0,   # No embedding for flat PPO
             "warmup_steps": cfg.warmup_steps,
-            "use_hrssa": False,  # Force flat PPO mode
-            "use_regime_encoder": False,  # Disable encoder
             "reward_omega": cfg.reward_omega,
             "verbose": cfg.verbose,
             "viz_dir": cfg.viz_dir,
@@ -565,29 +561,29 @@ class FlatPPOTrainer:
                 if is_root:
                     print(f"[FlatPPO] Training complete - reached {self.cfg.total_timesteps} steps", flush=True)
                 break
-        
+
             obs, ep_rewards_list = self.collect_rollout(obs)
             mean_loss = self.update()
-            
+
             rollout_count += 1
 
             # Step the learning rate scheduler once per rollout (only on root)
             if is_root:
                 self.scheduler.step()
                 current_lr = self.scheduler.get_last_lr()[0]
-            
+
             if is_root and ep_rewards_list:
                 ep_r = ep_rewards_list[-1]
                 mean100 = np.mean(self.ep_rewards) if self.ep_rewards else ep_r
-                
+
                 # Get episode summary from environment
                 ep_summary = self.env.get_episode_summary()
                 ep_drag = ep_summary.get('mean_drag', None)
                 ep_lift = ep_summary.get('mean_abs_lift', None)
-                
+
                 # Check and save best model
                 self._check_and_save_best(ep_r, ep_drag, ep_lift)
-                
+
                 # Build output string
                 output_lines = [
                     f"\n{'='*60}",
@@ -595,27 +591,27 @@ class FlatPPOTrainer:
                     f"  Episode Reward: {ep_r:8.4f}",
                     f"  100-Ep Average: {mean100:8.4f}",
                 ]
-                
+
                 if ep_drag is not None:
                     drag100 = np.mean(self.ep_drags) if self.ep_drags else ep_drag
                     output_lines.append(f"  Mean Drag:      {ep_drag:8.4f}  (100-ep avg: {drag100:8.4f})")
-                
+
                 if ep_lift is not None:
                     lift100 = np.mean(self.ep_lifts) if self.ep_lifts else ep_lift
                     output_lines.append(f"  Mean |Lift|:    {ep_lift:8.4f}  (100-ep avg: {lift100:8.4f})")
-                
+
                 output_lines.extend([
                     f"  PPO Loss:       {mean_loss:.4f}",
                     f"  Learning Rate:  {current_lr:.2e}",
                     f"  Best Reward:    {self.best_reward:.4f} (ep {self.best_episode})",
                     f"{'='*60}",
                 ])
-                
+
                 print("\n".join(output_lines), flush=True)
-                
+
                 if self.episode > 0 and self.episode % self.cfg.save_interval == 0:
                     self.save()
-                    
+
         if is_root:
             self.save(tag="final")
             
