@@ -1,13 +1,13 @@
 # baseline/config_flat.yaml
 Re: 100
 mesh: "medium"
-dt: 0.01 
+dt: 0.01
 num_substeps: 170
 n_probes: 6
 warmup_steps: 500
 reward_omega: 1.0
 
-# PPO hyperparameters 
+# PPO hyperparameters
 total_timesteps: 500000
 n_steps: 2048
 n_epochs: 10
@@ -18,7 +18,7 @@ clip_eps: 0.2
 vf_coef: 0.5
 ent_coef: 0.01
 max_grad_norm: 0.5
-lr: 0.0003  
+lr: 0.0003
 
 # Logging and Visualization
 log_interval: 1
