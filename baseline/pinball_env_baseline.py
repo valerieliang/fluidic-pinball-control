@@ -96,6 +96,12 @@ class PinballEnvBaseline(gym.Env):
         self.reward_omega = cfg.get("reward_omega", 1.0)
         self.verbose = cfg.get("verbose", False)
 
+        # --- Warmup cache ---
+        # If a cache file exists for this Re/mesh combo, normalization stats
+        # are loaded instantly instead of re-running the warmup CFD loop.
+        self.warmup_cache_dir = Path(cfg.get("warmup_cache_dir", "warmup_cache"))
+        self.use_warmup_cache = cfg.get("use_warmup_cache", True)
+
         # --- Data export configuration ---
         self.data_dir = Path(cfg.get("data_dir", "episode_data"))
         self.save_episode_h5 = cfg.get("save_episode_h5", True) and H5PY_AVAILABLE
@@ -510,10 +516,65 @@ class PinballEnvBaseline(gym.Env):
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         plt.close()
 
+    def _warmup_cache_path(self) -> Path:
+        """Return path to the warmup cache file for this Re/mesh combo."""
+        self.warmup_cache_dir.mkdir(parents=True, exist_ok=True)
+        return self.warmup_cache_dir / f"warmup_Re{self.Re}_{self.mesh}_p{self.n_probes}_s{self.warmup_steps}.npz"
+
+    def _save_warmup_cache(self):
+        """Save normalization stats to cache file."""
+        if not self._is_root:
+            return
+        path = self._warmup_cache_path()
+        np.savez(path, obs_mean=self._obs_mean, obs_std=self._obs_std)
+        self._log(f"[WARMUP] Cache saved -> {path}", force=True)
+
+    def _load_warmup_cache(self) -> bool:
+        """Try to load normalization stats from cache. Returns True if successful."""
+        if not self.use_warmup_cache:
+            return False
+        path = self._warmup_cache_path()
+        if not path.exists():
+            return False
+        try:
+            data = np.load(path)
+            self._obs_mean = data['obs_mean']
+            self._obs_std = data['obs_std']
+            self._normalizer_fitted = True
+            self._log(f"[WARMUP] Loaded normalization stats from cache: {path}", force=True)
+            self._log(f"[WARMUP] mean={self._obs_mean}, std={self._obs_std}", force=True)
+            return True
+        except Exception as e:
+            self._log(f"[WARMUP] Cache load failed ({e}), re-running warmup", force=True)
+            return False
+
     def _fit_normalizer(self):
         """Fit observation normalizer with visualization."""
         comm = _mpi_comm()
         rank = _rank()
+
+        # Try cache first — skips the entire CFD warmup loop.
+        # All ranks must agree on whether the cache was hit so they
+        # don't diverge (root enters reset, non-roots enter warmup loop).
+        cache_hit = np.array([0], dtype=np.int32)
+        if rank == 0 and self._load_warmup_cache():
+            cache_hit[0] = 1
+
+        if comm is not None:
+            comm.Bcast(cache_hit, root=0)
+
+        if cache_hit[0]:
+            # Broadcast stats to all non-root ranks
+            if comm is not None:
+                stats = np.array([*self._obs_mean, *self._obs_std])
+                comm.Bcast(stats, root=0)
+                if rank != 0:
+                    self._obs_mean = stats[:self.n_probes]
+                    self._obs_std = stats[self.n_probes:]
+                    self._normalizer_fitted = True
+            # All ranks reset together so Firedrake's parallel state is consistent
+            raw = self._env.reset()
+            return self._raw_to_array(raw)
 
         self._log(f"[WARMUP] Starting normalizer fitting with {self.warmup_steps} steps", force=True)
         start_time = time.time()
@@ -570,6 +631,7 @@ class PinballEnvBaseline(gym.Env):
                 self._obs_mean = stacked.mean(axis=0)
                 self._obs_std = stacked.std(axis=0).clip(1e-6)
                 self._log(f"[WARMUP] Stats: mean={self._obs_mean}, std={self._obs_std}", force=True)
+                self._save_warmup_cache()
                 if self.save_warmup_plots:
                     self._plot_warmup_statistics()
             else:

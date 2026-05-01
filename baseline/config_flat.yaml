@@ -9,7 +9,7 @@ reward_omega: 1.0
 
 # PPO hyperparameters
 total_timesteps: 500000
-n_steps: 2048
+n_steps: 512
 n_epochs: 10
 batch_size: 64
 gamma: 0.99
